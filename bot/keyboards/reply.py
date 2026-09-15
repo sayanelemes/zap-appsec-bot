@@ -8,15 +8,14 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
     """
     builder = ReplyKeyboardBuilder()
     builder.row(
-        KeyboardButton(text="📝 Заполнить анкету"),
-        KeyboardButton(text="👤 Мой профиль"),
-    )
-    builder.row(
-        KeyboardButton(text="🧹 Новый диалог"),
+        KeyboardButton(text="🛡 Проверить сайт"),
         KeyboardButton(text="ℹ️ Помощь"),
     )
+    builder.row(
+        KeyboardButton(text="👤 Мой профиль"),
+        KeyboardButton(text="📝 Заполнить анкету"),
+    )
     return builder.as_markup(
-
         resize_keyboard=True,
         input_field_placeholder="Выберите действие из меню...",
     )

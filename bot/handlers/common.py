@@ -68,6 +68,22 @@ async def cmd_start(message: Message, session: AsyncSession) -> None:
     )
 
 
+@common_router.message(F.text == "🛡 Проверить сайт")
+async def cmd_check_hint(message: Message) -> None:
+    """
+    Подсказка по запуску проверки при нажатии кнопки в меню.
+    """
+    await message.answer(
+        "🛡 <b>Запуск аудита безопасности:</b>\n\n"
+        "Отправьте команду с адресом целевого сайта:\n"
+        "<code>/check &lt;URL&gt;</code>\n\n"
+        "<i>Пример:</i>\n"
+        "<code>/check http://testphp.vulnweb.com/listproducts.php?cat=1</code>\n\n"
+        "После сканирования нажмите кнопку <b>«💡 Получить аудит и код исправлений от ИИ»</b> для анализа уязвимостей.",
+        reply_markup=get_main_menu_keyboard(),
+    )
+
+
 @common_router.message(Command("help"))
 @common_router.message(F.text == "ℹ️ Помощь")
 async def cmd_help(message: Message) -> None:
@@ -78,21 +94,19 @@ async def cmd_help(message: Message) -> None:
         "📖 <b>Справка ZAP AppSec AI Auditor:</b>\n\n"
         "/start — Главное меню и перезапуск\n"
         "/help — Вывод этого справочного сообщения\n"
-        "/reset — Сброс контекста диалога с нейросетью\n"
         "/cancel — Прерывание текущего ввода (FSM)\n\n"
         "🛡 <b>Аудит безопасности веб-сайтов (OWASP ZAP):</b>\n"
         "/check &lt;URL&gt; — Запуск сканирования и аудита уязвимостей\n"
         "<i>Пример:</i> <code>/check http://testphp.vulnweb.com/listproducts.php?cat=1</code>\n"
         "/zap_status — Проверка статуса подключения к ZAP\n\n"
-        "🤖 <b>AI-ассистент (Gemini):</b>\n"
-        "• После сканирования нажмите кнопку <b>«💡 Получить аудит и код исправлений от ИИ»</b>\n"
-        "• Вы можете отправить боту любой вопрос по безопасности и коду\n"
-        "• Отправьте фото (архитектуру, скриншот ошибки) для анализа\n\n"
+        "💡 <b>AI-аудит (Gemini):</b>\n"
+        "• ИИ-ассистент работает в связке со сканером.\n"
+        "• После выполнения <code>/check</code> нажмите кнопку <b>«💡 Получить аудит и код исправлений от ИИ»</b>, чтобы нейросеть сгенерировала простое объяснение рисков и готовый промпт для AI-агентов кодогенерации (/goal).\n\n"
         "Кнопки нижнего меню:\n"
-        "• <b>📝 Заполнить анкету</b> — FSM анкета\n"
+        "• <b>🛡 Проверить сайт</b> — вызов сканирования\n"
+        "• <b>ℹ️ Помощь</b> — данная справка\n"
         "• <b>👤 Мой профиль</b> — учетная запись в БД\n"
-        "• <b>🧹 Новый диалог</b> — очистка памяти контекста\n"
-        "• <b>ℹ️ Помощь</b> — данная справка"
+        "• <b>📝 Заполнить анкету</b> — анкета пользователя"
     )
     await message.answer(text=help_text, reply_markup=get_main_menu_keyboard())
 

@@ -13,19 +13,22 @@ def get_root_router() -> Router:
     Объединяет все дочерние роутеры приложения в единый корневой роутер в строгом порядке:
     1. errors_router: глобальный перехват ошибок
     2. common_router: системные команды (/start, /help, анкета FSM, кнопки меню)
-    3. zap_router: сканирование безопасности веб-приложений через OWASP ZAP (/check)
-    4. ai_router: обработка свободного текста, фото, голосовых и команды /reset через Gemini
-    5. fallback_router: заглушка для нераспознанных типов сообщений
+    3. zap_router: сканирование безопасности веб-приложений через OWASP ZAP (/check) и вызов AI-аудита
+    4. fallback_router: информативная заглушка для текстовых сообщений (прямой чат с ИИ отключен)
     """
     root_router = Router(name="root")
     fallback_router = Router(name="fallback")
 
-    # Заглушка для любых других необработанных типов сообщений
+    # Заглушка для любых текстовых/медиа сообщений вне команды /check
     @fallback_router.message()
     async def global_fallback(message: Message) -> None:
         await message.answer(
-            "🤖 Я понимаю текстовые вопросы, фото и голосовые сообщения через Gemini, "
-            "команду аудита сайтов /check <URL>, а также команды из меню. "
+            "🛡️ <b>ZAP AppSec AI Auditor</b> работает исключительно в режиме аудита безопасности веб-сайтов.\n\n"
+            "Прямой чат с нейросетью отключен — ИИ анализирует уязвимости и генерирует промпты для исправления после сканирования сайта.\n\n"
+            "Отправьте команду для проверки целевого ресурса:\n"
+            "<code>/check &lt;URL&gt;</code>\n\n"
+            "<i>Пример:</i>\n"
+            "<code>/check http://testphp.vulnweb.com/listproducts.php?cat=1</code>\n\n"
             "Напишите /help для подробностей.",
             reply_markup=get_main_menu_keyboard(),
         )
@@ -33,10 +36,9 @@ def get_root_router() -> Router:
     root_router.include_router(errors_router)
     root_router.include_router(common_router)
     root_router.include_router(zap_router)
-    root_router.include_router(ai_router)
     root_router.include_router(fallback_router)
 
     return root_router
 
 
-__all__ = ["get_root_router", "common_router", "errors_router", "ai_router", "zap_router"]
+__all__ = ["get_root_router", "common_router", "errors_router", "zap_router"]
