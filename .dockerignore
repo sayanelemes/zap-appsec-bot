@@ -1,0 +1,30 @@
+__pycache__
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Logs & Databases
+logs/*
+!logs/.gitkeep
+*.log
+bot.db
+*.sqlite3
+
+# Git & Docker
+.git
+.gitignore
+.dockerignore
+
+# IDE & Editor settings
+.idea/
+.vscode/
+
+# Secrets & Local Configs
+.env
+.env.local
+.env.*.local

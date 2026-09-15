@@ -1,0 +1,20 @@
+[Unit]
+Description=ZAP AppSec AI Auditor Telegram Bot & OWASP ZAP Daemon
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yelemessayan
+WorkingDirectory=/home/yelemessayan/bot_template
+ExecStart=/home/yelemessayan/bot_template/run.sh
+ExecStop=/home/yelemessayan/bot_template/stop.sh
+Restart=always
+RestartSec=10
+TimeoutStopSec=15
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target default.target
