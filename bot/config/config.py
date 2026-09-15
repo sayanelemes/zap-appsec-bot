@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     ZAP_PROXY: str = "http://127.0.0.1:8090"
     ZAP_API_KEY: SecretStr | None = None
 
+    @property
+    def zap_endpoint(self) -> str:
+        return self.ZAP_PROXY or self.ZAP_URL
+
 
     model_config = SettingsConfigDict(
         env_file=".env",
