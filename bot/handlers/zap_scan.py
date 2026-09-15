@@ -257,6 +257,8 @@ async def handle_scan_mode_selection(
         "stop_event": stop_event,
         "status_msg": status_msg,
         "user_id": callback.from_user.id,
+        "target_url": target_url,
+        "clean_origin": clean_origin,
     }
 
     # Запуск выполнения в фоне с захватом семафора
@@ -301,20 +303,28 @@ async def _execute_scan_worker(
             if stop_event.is_set():
                 return
 
-            # 2. Прогрев URL
-            await zap.access_url(target_url)
+            # 2. Фоновый прогрев через ZAP прокси без блокировки основного потока
+            asyncio.create_task(zap.access_url(target_url))
 
-            if stop_event.is_set():
-                return
-
-            # 3. Краулинг / Паук (Spider)
+            # 3. Краулинг / Паук (Spider) запускается немедленно
             spider_id = await zap.start_spider(target_url)
             if not spider_id.isdigit():
                 spider_id = await zap.start_spider(clean_origin)
 
             if spider_id.isdigit():
                 _active_scans[scan_token]["spider_id"] = spider_id
-                last_spider_percent = -1
+                # Сразу отображаем индикатор паука 0% для мгновенного отклика интерфейса
+                try:
+                    await status_msg.edit_text(
+                        f"<b>{mode_name}</b>\n"
+                        f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
+                        f"🕷 <b>Паук:</b> {render_progress_bar(0)}",
+                        reply_markup=get_scan_stop_keyboard(token=scan_token),
+                    )
+                except Exception:
+                    pass
+
+                last_spider_percent = 0
                 max_spider_time = 12 if mode == "passive" else 180
                 spider_start = time.monotonic()
 
@@ -528,13 +538,26 @@ async def handle_scan_stop_callback(
 
     await callback.answer("🛑 Сканирование останавливается...", show_alert=False)
 
+    target_url = scan_ctx.get("target_url", "")
+    clean_origin = scan_ctx.get("clean_origin", "")
+
+    # Регистрируем заново target_id, чтобы пользователь мог выбрать другой режим или отменить
+    target_id = uuid.uuid4().hex[:10]
+    _pending_scans[target_id] = {
+        "target_url": target_url,
+        "clean_origin": clean_origin,
+        "created_at": time.time(),
+        "user_id": callback.from_user.id,
+    }
+
     status_msg = scan_ctx.get("status_msg")
     if status_msg:
         try:
             await status_msg.edit_text(
-                "⛔ <b>Сканирование принудительно остановлено пользователем.</b>\n"
-                "Все фоновые процессы ZAP Spider и Active Scan завершены, ресурсы освобождены.",
-                reply_markup=None,
+                f"⛔ <b>Сканирование остановлено.</b>\n\n"
+                f"🎯 <b>Цель:</b> <code>{html.escape(target_url)}</code>\n\n"
+                f"Выберите тип и глубину аудита безопасности:",
+                reply_markup=get_scan_mode_keyboard(target_id=target_id),
             )
         except Exception:
             pass

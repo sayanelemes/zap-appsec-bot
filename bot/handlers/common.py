@@ -21,7 +21,7 @@ common_router = Router(name="common")
 async def cmd_start(message: Message) -> None:
     """
     Обработчик команды /start.
-    Выводит приветственное сообщение и стартовое меню.
+    Выводит приветственное сообщение со всеми возможностями бота и стартовое меню.
     """
     user = message.from_user
     if not user:
@@ -30,23 +30,33 @@ async def cmd_start(message: Message) -> None:
     user_name = user.full_name or user.first_name or "пользователь"
     welcome_text = (
         f"👋 Привет, <b>{html.escape(user_name)}</b>!\n\n"
-        "🛡️ Добро пожаловать в <b>ZAP AppSec AI Auditor</b> — сканер веб-уязвимостей и ИИ-ассистент по безопасности.\n\n"
-        "✨ <b>Что умеет бот:</b>\n"
-        "• <b>/check &lt;URL&gt;</b> — Запуск быстрого сканирования сайта через <b>OWASP ZAP</b> (Spider + Active Scan)\n"
-        "• <b>💡 ИИ-аудит (Gemini)</b> — Понятное объяснение сути рисков простыми словами\n"
-        "• <b>🤖 Промпты для AI-агентов</b> — Готовые задачи <code>/goal</code> для Cursor, Antigravity, Claude Code с кодом исправления\n"
-        "• <b>📄 Отчеты</b> — Выгрузка полного HTML-отчета ZAP со всеми техническими деталями\n"
-        "• <b>/zap_status</b> — Проверка состояния демона сканера\n\n"
-        "<i>Отправьте команду <code>/check http://target-site.com</code> или выберите действие в меню:</i>"
+        "🛡️ Добро пожаловать в <b>ZAP AppSec AI Auditor</b> — комплексный сканер веб-уязвимостей и ИИ-ассистент по безопасности.\n\n"
+        "✨ <b>Ключевые возможности бота:</b>\n\n"
+        "1️⃣ <b>Динамический анализ (DAST / OWASP ZAP):</b>\n"
+        "• Отправьте ссылку на сайт или команду <code>/check &lt;URL&gt;</code>\n"
+        "• <b>3 уровня глубины анализа:</b>\n"
+        "  - 🛡 <b>Пассивный</b> (5–10 сек): аудит заголовков безопасности, Cookies, CSP без инъекций\n"
+        "  - ⚡ <b>Быстрый</b> (90 сек): Spider + Active Scan с лимитом времени\n"
+        "  - 🔍 <b>Глубокий</b> (5–10 мин): глубокий краулинг и полное сканирование\n"
+        "• <b>🛑 Кнопка 'Стоп':</b> экстренная остановка процесса в один клик с возвратом к выбору режимов\n"
+        "• <b>📄 HTML-отчет:</b> автоматическая выгрузка полного технического отчета ZAP файлом в чат\n\n"
+        "2️⃣ <b>Статический анализ зависимостей (SAST / GitHub + OSV.dev):</b>\n"
+        "• Отправьте ссылку на публичный GitHub-репозиторий: <code>https://github.com/owner/repo</code>\n"
+        "• Мгновенный парсинг <code>requirements.txt</code> и <code>package.json</code> без клонирования\n"
+        "• Отображение CVE/GHSA, точный расчет баллов CVSS и сопоставление уровней риска (Critical/High/Medium/Low)\n"
+        "• Рекомендация безопасных версий для обновления (Fixed in: >= x.x.x)\n\n"
+        "3️⃣ <b>Двухэтапный ИИ-аудит (Google Gemini):</b>\n"
+        "• Простое объяснение сути каждой найденной проблемы и реалистичного сценария атаки\n"
+        "• Однокликовые задачи <code>/goal</code> для AI-агентов кодогенерации (Cursor, Antigravity, Claude Code) с кодом исправления\n\n"
+        "🔒 <b>4️⃣ Защита периметра (Hardening):</b>\n"
+        "• Встроенный SSRF-фильтр с DNS-резолвом (блокировка RFC 1918, 127.0.0.0/8, Cloud Metadata)\n"
+        "• Авторизация доступа (Admin Whitelist)\n\n"
+        "<i>Отправьте ссылку на сайт или GitHub-репозиторий для начала аудита:</i>"
     )
 
     await message.answer(
         text=welcome_text,
         reply_markup=get_main_menu_keyboard(),
-    )
-    await message.answer(
-        text="👇 Дополнительные действия:",
-        reply_markup=get_welcome_inline_keyboard(),
     )
 
 
@@ -87,7 +97,7 @@ async def cmd_help(message: Message) -> None:
         "  - <i>Пассивный</i> (5–10 сек): заголовки, куки, CSP без инъекций\n"
         "  - <i>Быстрый</i> (90 сек): Spider + Active Scan с лимитом времени\n"
         "  - <i>Глубокий</i> (5–10 мин): полный краулинг и сканирование\n"
-        "• <b>🛑 Кнопка 'Стоп':</b> мгновенная остановка паука и сканера\n"
+        "• <b>🛑 Кнопка 'Стоп':</b> мгновенная остановка паука и сканера с возвратом к выбору режимов\n"
         "• <b>💡 ИИ-аудит (Gemini):</b> карточки уязвимостей и готовые задачи <code>/goal</code> для AI-агентов\n\n"
         "📦 <b>2. Статический анализ зависимостей (SAST / OSV.dev):</b>\n"
         "• Отправьте ссылку на GitHub: <code>https://github.com/owner/repo</code>\n"
@@ -118,8 +128,7 @@ async def cmd_profile(message: Message) -> None:
         "👤 <b>Ваш профиль в Telegram:</b>\n\n"
         f"• <b>Telegram ID:</b> <code>{user.id}</code>\n"
         f"• <b>Username:</b> @{html.escape(user.username or 'не указан')}\n"
-        f"• <b>Имя:</b> {html.escape(user.full_name)}\n"
-        "• <b>Режим работы:</b> Stateless Fast Scanner (без БД)"
+        f"• <b>Имя:</b> {html.escape(user.full_name)}"
     )
     await message.answer(text=profile_text)
 

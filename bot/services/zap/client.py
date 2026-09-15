@@ -126,26 +126,20 @@ class ZapService:
 
     async def access_url(self, target_url: str) -> None:
         """
-        Предварительный прогрев URL для инициализации дерева сайтов ZAP:
-        1. Вызов zap.core.access_url
-        2. Прямой HTTP-запрос через локальный прокси ZAP (гарантирует фиксацию в дереве узлов)
+        Быстрый предварительный прогрев URL через локальный прокси ZAP (таймаут до 2.5с)
+        для немедленной фиксации корня сайта в дереве узлов.
         """
-        try:
-            await asyncio.to_thread(self._zap.core.access_url, url=target_url)
-        except Exception as e:
-            logger.warning("Ошибка при вызове core.access_url для %s: %s", target_url, e)
-
         try:
             await asyncio.to_thread(
                 requests.get,
                 target_url,
                 proxies=self._proxies,
-                timeout=10,
+                timeout=2.5,
                 verify=False,
             )
-            logger.info("Успешный HTTP прогрев через ZAP прокси для: %s", target_url)
+            logger.info("Быстрый прогрев через ZAP прокси успешен: %s", target_url)
         except Exception as e:
-            logger.warning("Прокси-запрос прогрева не удался для %s: %s", target_url, e)
+            logger.debug("Быстрый прогрев через ZAP прокси завершен: %s", e)
 
     async def start_spider(self, target_url: str) -> str:
         """Запуск паука (Spider) для краулинга ссылок и структуры сайта."""
