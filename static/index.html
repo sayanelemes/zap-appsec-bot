@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>ZAP_DAST // SOC Scanner</title>
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -41,11 +41,16 @@
   </script>
 
   <style>
-    body {
+    html, body {
       background-color: #0a0c10;
       color: #c9d1d9;
       font-family: 'JetBrains Mono', monospace;
       -webkit-font-smoothing: antialiased;
+      overscroll-behavior-y: none !important;
+      overscroll-behavior: none !important;
+      touch-action: pan-y !important;
+      min-height: 100vh;
+      overflow-x: hidden;
     }
     /* Custom scanline / cyber grid subtle effect */
     .soc-grid {
@@ -192,14 +197,40 @@
       </div>
     </section>
 
+    <!-- AI ADVISOR (GEMINI) SECTION -->
+    <section id="ai-section" class="hidden border border-purple-500/40 bg-[#120f1d] p-4 rounded-lg shadow-[0_0_16px_rgba(168,85,247,0.15)] flex flex-col gap-3 transition-all">
+      <div class="flex items-center justify-between border-b border-purple-900/40 pb-2">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-purple-400 animate-pulse shadow-[0_0_8px_#c084fc]"></span>
+          <span class="text-xs uppercase tracking-wider text-purple-300 font-bold">🧠 ИИ-АУДИТ &amp; ЗАДАЧИ /goal (GEMINI)</span>
+        </div>
+        <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-purple-950 border border-purple-700 text-purple-300">
+          APPSEC AI
+        </span>
+      </div>
+
+      <button
+        id="btn-ai-audit"
+        onclick="handleRequestAiAudit()"
+        class="bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold py-2.5 px-4 rounded text-xs flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer"
+      >
+        <span>✨ ПОЛУЧИТЬ РАЗБОР УЯЗВИМОСТЕЙ И ПРОМПТЫ /goal ДЛЯ AI-АГЕНТОВ</span>
+      </button>
+
+      <div id="ai-results-container" class="flex flex-col gap-3 pt-1"></div>
+    </section>
+
   </div>
 
   <script>
-    // Инициализация Telegram WebApp
+    // Инициализация Telegram WebApp с фиксацией от скрытия/смахивания
     const tg = window.Telegram?.WebApp;
     if (tg) {
       tg.ready();
       tg.expand();
+      if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
+      if (tg.isVerticalSwipesEnabled !== undefined) tg.isVerticalSwipesEnabled = false;
+      if (tg.enableClosingConfirmation) tg.enableClosingConfirmation();
       if (tg.setHeaderColor) tg.setHeaderColor('#0a0c10');
       if (tg.setBackgroundColor) tg.setBackgroundColor('#0a0c10');
     }
@@ -405,6 +436,127 @@
 
       // Отображение списка уязвимостей
       renderFindings(findings);
+
+      // Управление секцией ИИ-аудита (Gemini)
+      const aiSection = document.getElementById('ai-section');
+      const btnAi = document.getElementById('btn-ai-audit');
+      if (findings.length > 0 || (data.ai_analysis && data.ai_analysis.length > 0)) {
+        aiSection.classList.remove('hidden');
+      }
+
+      if (data.ai_loading) {
+        btnAi.disabled = true;
+        btnAi.innerHTML = '<span>⏳ Нейросеть Gemini анализирует уязвимости и генерирует код...</span>';
+      } else if (!isRunning) {
+        btnAi.disabled = false;
+        if (data.ai_analysis && data.ai_analysis.length > 0) {
+          btnAi.innerHTML = '<span>🔄 ОБНОВИТЬ ИИ-АУДИТ (GEMINI)</span>';
+        } else {
+          btnAi.innerHTML = '<span>✨ ПОЛУЧИТЬ РАЗБОР УЯЗВИМОСТЕЙ И ПРОМПТЫ /goal ДЛЯ AI-АГЕНТОВ</span>';
+        }
+      }
+
+      if (data.ai_analysis && data.ai_analysis.length > 0) {
+        renderAiAnalysis(data.ai_analysis);
+      }
+    }
+
+    // Запрос ИИ-аудита уязвимостей через Gemini
+    async function handleRequestAiAudit() {
+      haptic('impact', 'heavy');
+      const btn = document.getElementById('btn-ai-audit');
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳ Нейросеть Gemini анализирует уязвимости и генерирует код...</span>';
+
+      try {
+        const res = await fetch('/api/scan/ai-advisor', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({ detail: 'Ошибка вызова ИИ' }));
+          haptic('notification', 'error');
+          alert('Ошибка ИИ-аудита: ' + (errData.detail || res.statusText));
+          btn.disabled = false;
+          btn.innerHTML = '<span>✨ ПОЛУЧИТЬ РАЗБОР УЯЗВИМОСТЕЙ И ПРОМПТЫ /goal ДЛЯ AI-АГЕНТОВ</span>';
+          return;
+        }
+
+        const data = await res.json();
+        haptic('notification', 'success');
+        renderAiAnalysis(data.analysis || []);
+      } catch (e) {
+        haptic('notification', 'error');
+        alert('Не удалось подключиться к сервису Gemini: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span>🔄 ОБНОВИТЬ ИИ-АУДИТ (GEMINI)</span>';
+      }
+    }
+
+    // Отображение карточек ИИ-аудита
+    function renderAiAnalysis(chunks) {
+      const container = document.getElementById('ai-results-container');
+      if (!chunks || chunks.length === 0) {
+        container.innerHTML = '';
+        return;
+      }
+
+      container.innerHTML = chunks.map((chunk, cIdx) => {
+        return `
+          <div class="border border-purple-800/60 bg-[#161226] rounded-lg p-3.5 flex flex-col gap-2 shadow-md">
+            <div class="text-xs text-gray-200 leading-relaxed font-sans whitespace-pre-wrap">${formatAiMarkdown(chunk, cIdx)}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Форматирование markdown ответа Gemini для Mini App
+    function formatAiMarkdown(text, chunkIdx) {
+      if (!text) return '';
+      const parts = text.split(/(```[\s\S]*?```)/g);
+      return parts.map((part, pIdx) => {
+        if (part.startsWith('```') && part.endsWith('```')) {
+          const rawCode = part.replace(/^```[a-zA-Z0-9_-]*\n?/, '').replace(/\n?```$/, '');
+          return `
+            <div class="my-2 border border-purple-500/40 rounded bg-[#0a0814] overflow-hidden font-mono text-xs">
+              <div class="flex items-center justify-between bg-purple-950/80 px-3 py-1.5 border-b border-purple-900/60">
+                <span class="text-[10px] text-purple-300 font-bold uppercase tracking-wider">🤖 Промпт для AI-агента (Cursor / Antigravity)</span>
+                <button
+                  type="button"
+                  onclick="copyGoal(this, '${escapeHtml(encodeURIComponent(rawCode))}')"
+                  class="bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-bold px-2.5 py-1 rounded transition-all flex items-center gap-1 cursor-pointer"
+                >
+                  📋 Скопировать /goal
+                </button>
+              </div>
+              <pre class="p-3 text-emerald-400 overflow-x-auto select-all whitespace-pre-wrap font-mono text-[11px] leading-relaxed">${escapeHtml(rawCode)}</pre>
+            </div>
+          `;
+        }
+        return escapeHtml(part)
+          .replace(/◈\s*([^<\n]+)/g, '<div class="text-purple-300 font-bold text-sm mt-2 mb-1 flex items-center gap-1.5">◈ $1</div>')
+          .replace(/💡\s*([^<\n]+)/g, '<div class="text-amber-300 font-bold text-xs mt-2">💡 $1</div>')
+          .replace(/🤖\s*([^<\n]+)/g, '<div class="text-cyan-300 font-bold text-xs mt-2">🤖 $1</div>');
+      }).join('');
+    }
+
+    // Копирование промпта в буфер обмена
+    function copyGoal(btn, encodedText) {
+      const text = decodeURIComponent(encodedText);
+      navigator.clipboard.writeText(text).then(() => {
+        haptic('notification', 'success');
+        const orig = btn.innerHTML;
+        btn.innerHTML = '✅ Скопировано!';
+        btn.classList.replace('bg-purple-600', 'bg-emerald-600');
+        setTimeout(() => {
+          btn.innerHTML = orig;
+          btn.classList.replace('bg-emerald-600', 'bg-purple-600');
+        }, 2000);
+      }).catch(err => {
+        console.error('Clipboard error:', err);
+      });
     }
 
     // Отображение карточек уязвимостей с аккордеоном

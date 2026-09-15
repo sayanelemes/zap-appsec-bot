@@ -95,8 +95,11 @@ else
     echo "⚠️ Виртуальное окружение не найдено, запуск через системный python3"
 fi
 
-# 5. Очистка старых экземпляров бота для предотвращения TelegramConflictError
+# 5. Очистка старых экземпляров бота и освобождение порта 8000 (FastAPI/Uvicorn)
 pkill -f "python.*main\.py" >/dev/null 2>&1 || true
+if command -v fuser >/dev/null 2>&1; then
+    fuser -k -9 8000/tcp >/dev/null 2>&1 || true
+fi
 sleep 1
 
 # 6. Запуск Telegram-бота на переднем плане

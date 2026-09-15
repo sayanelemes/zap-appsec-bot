@@ -52,6 +52,9 @@ class ScanManager:
         self._lock = asyncio.Lock()
         self._spider_id: str = ""
         self._ascan_id: str = ""
+        self._raw_alerts: list[dict[str, Any]] = []
+        self._ai_analysis: list[str] = []
+        self._ai_loading: bool = False
         self._zap_service: ZapService | None = None
         self._sast_auditor: GithubSastAuditor | None = None
 
@@ -88,7 +91,52 @@ class ScanManager:
             "target": self._target,
             "mode": self._mode,
             "scan_type": self._scan_type,
+            "ai_analysis": list(self._ai_analysis),
+            "ai_loading": self._ai_loading,
         }
+
+    async def run_ai_audit(self) -> list[str]:
+        """
+        Генерация двухэтапного ИИ-аудита безопасности через Google Gemini:
+        1. Разбор уязвимостей простыми словами и сценарии атак.
+        2. Однокликовые задачи /goal для AI-агентов кодогенерации (Cursor / Antigravity / Claude Code).
+        """
+        if not self._findings and not self._raw_alerts:
+            raise ValueError("Нет данных для проведения ИИ-аудита. Сначала выполните сканирование.")
+
+        self._ai_loading = True
+        self.add_log("🧠 Запуск двухэтапного ИИ-аудита через Google Gemini...")
+        try:
+            from bot.services.ai import LlmAdvisorService
+            advisor = LlmAdvisorService()
+
+            alerts_to_analyze: list[dict[str, Any]] = []
+            if self._raw_alerts:
+                alerts_to_analyze = self._raw_alerts
+            else:
+                for f in self._findings:
+                    alerts_to_analyze.append({
+                        "alert": f.get("title", "Уязвимость безопасности"),
+                        "risk": f.get("severity", "Medium").capitalize(),
+                        "description": f.get("description", ""),
+                        "param": f.get("param", ""),
+                        "cweid": f.get("cwe", "").replace("CWE-", ""),
+                        "url": self._target,
+                    })
+
+            chunks = await advisor.analyze_vulnerabilities(
+                alerts=alerts_to_analyze,
+                target_url=self._target or "https://target-app.local",
+            )
+            self._ai_analysis = chunks
+            self.add_log(f"✅ ИИ-аудит успешно сгенерирован! Получено рекомендаций: {len(chunks)}")
+            return chunks
+        except Exception as e:
+            logger.exception("Ошибка при генерации ИИ-аудита: %s", e)
+            self.add_log(f"❌ Ошибка вызова нейросети Gemini: {e}")
+            raise
+        finally:
+            self._ai_loading = False
 
     async def start_scan(self, target: str, mode: str = "fast", user_id: int | None = None) -> dict[str, Any]:
         """Запуск сканирования DAST или SAST."""
@@ -108,6 +156,9 @@ class ScanManager:
             self._progress = 0
             self._logs.clear()
             self._findings.clear()
+            self._raw_alerts.clear()
+            self._ai_analysis.clear()
+            self._ai_loading = False
             self._target = target
             self._mode = mode
             self._spider_id = ""
@@ -335,6 +386,7 @@ class ScanManager:
             self._progress = 95
             self.add_log("Сбор и категоризация обнаруженных уязвимостей...")
             alerts_summary, alerts_list = await zap.get_alerts_summary(clean_origin=clean_origin)
+            self._raw_alerts = list(alerts_list)
             deduped = deduplicate_alerts(alerts_list)
 
             risk_map = {

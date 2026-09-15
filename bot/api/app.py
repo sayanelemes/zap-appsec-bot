@@ -41,6 +41,8 @@ class ScanStatusResponse(BaseModel):
     target: str = ""
     mode: str = ""
     scan_type: str = ""
+    ai_analysis: list[str] = []
+    ai_loading: bool = False
 
 
 def create_app() -> FastAPI:
@@ -142,6 +144,32 @@ def create_app() -> FastAPI:
         Возвращает состояние сканера для динамического обновления UI в Mini App.
         """
         return scan_manager.get_status()
+
+    @app.post(
+        "/api/scan/ai-advisor",
+        summary="Запуск AI-аудита уязвимостей через Google Gemini",
+    )
+    async def generate_ai_advisor(
+        user: dict[str, Any] = Depends(get_current_tma_user),
+    ) -> dict[str, Any]:
+        """
+        Вызывает Google Gemini API для генерации простого объяснения рисков
+        и готовых задач /goal для AI-агентов кодогенерации (Cursor / Antigravity / Claude Code).
+        """
+        try:
+            chunks = await scan_manager.run_ai_audit()
+            return {"status": "ok", "analysis": chunks}
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+        except Exception as e:
+            logger.exception("Ошибка генерации ИИ-аудита в API: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Не удалось сгенерировать ИИ-аудит: {e}",
+            )
 
     # Монтирование статических файлов Mini App UI
     static_dir = os.path.join(os.getcwd(), "static")
