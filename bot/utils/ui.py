@@ -77,13 +77,19 @@ async def update_screen(
                 return None
 
     elif isinstance(event, Message):
+        # 1. Немедленно удаляем входящее текстовое сообщение пользователя (клики по меню, ссылки, команды)
+        try:
+            await event.delete()
+        except (TelegramBadRequest, Exception) as exc:
+            logger.debug("Не удалось удалить входящее сообщение пользователя: %s", exc)
+
         data = await state.get_data()
         last_bot_msg_id = data.get("last_bot_msg_id")
 
         # В edit_message_text поддерживается только InlineKeyboardMarkup или None
         inline_markup = reply_markup if isinstance(reply_markup, InlineKeyboardMarkup) else None
 
-        # 1. Если активный экран уже существует — редактируем его на месте (без дерганий и удалений)
+        # 2. Если активный экран уже существует — редактируем его на месте (без дерганий)
         if last_bot_msg_id:
             try:
                 edited_msg = await event.bot.edit_message_text(

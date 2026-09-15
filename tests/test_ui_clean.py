@@ -36,8 +36,8 @@ class TestCleanUiHelper(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(res, edited_bot_msg)
-        # Входящее сообщение пользователя НЕ удаляется
-        user_msg.delete.assert_not_awaited()
+        # Входящее сообщение пользователя удаляется, чтобы чат не засорялся
+        user_msg.delete.assert_awaited_once()
         # Старое сообщение бота редактируется на месте с parse_mode="HTML"
         user_msg.bot.edit_message_text.assert_awaited_once_with(
             chat_id=12345,
@@ -63,6 +63,7 @@ class TestCleanUiHelper(unittest.IsolatedAsyncioTestCase):
         user_msg.__class__ = Message
         user_msg.chat = MagicMock()
         user_msg.chat.id = 12345
+        user_msg.delete = AsyncMock()
         user_msg.answer = AsyncMock(return_value=new_bot_msg)
 
         res = await update_screen(
@@ -72,6 +73,7 @@ class TestCleanUiHelper(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(res, new_bot_msg)
+        user_msg.delete.assert_awaited_once()
         user_msg.answer.assert_awaited_once_with(
             text="Первый экран после /start",
             reply_markup=None,

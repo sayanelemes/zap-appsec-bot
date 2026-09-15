@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import Any, Awaitable, Callable, Dict, Tuple
 from aiogram import BaseMiddleware
@@ -45,11 +46,28 @@ class ThrottlingMiddleware(BaseMiddleware):
             delta = now - last_time
 
             if delta < self.rate_limit:
+                # Всегда удаляем спам-сообщения от пользователя, чтобы чат не засорялся
+                if isinstance(event, Message):
+                    try:
+                        await event.delete()
+                    except Exception:
+                        pass
+
                 # Если спам продолжается, но предупреждение уже было - молча игнорируем
                 if not warned:
                     self._user_timestamps[user_id] = (now, True)
                     if isinstance(event, Message):
-                        await event.answer("⚠️ <b>Слишком быстро!</b> Пожалуйста, подождите секунду.")
+                        try:
+                            warn_msg = await event.answer("⚠️ <b>Слишком быстро!</b> Пожалуйста, подождите секунду.", parse_mode="HTML")
+                            async def _auto_delete(msg: Message) -> None:
+                                await asyncio.sleep(2.0)
+                                try:
+                                    await msg.delete()
+                                except Exception:
+                                    pass
+                            asyncio.create_task(_auto_delete(warn_msg))
+                        except Exception:
+                            pass
                     elif isinstance(event, CallbackQuery):
                         await event.answer("⚠️ Не кликайте так часто!", show_alert=False)
                 return None
