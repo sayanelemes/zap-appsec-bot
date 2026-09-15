@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from typing import Any, Optional
 from google import genai
 from google.genai import errors, types
