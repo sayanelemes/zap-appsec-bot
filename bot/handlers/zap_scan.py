@@ -14,8 +14,16 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 
 from bot.config.config import settings
-from bot.keyboards.inline import ZapAiAuditCallback, get_ai_audit_keyboard
+from bot.keyboards.inline import (
+    ZapAiAuditCallback,
+    ZapScanModeCallback,
+    ZapScanStopCallback,
+    get_ai_audit_keyboard,
+    get_scan_mode_keyboard,
+    get_scan_stop_keyboard,
+)
 from bot.services.ai import LlmAdvisorService, deduplicate_alerts, format_telegram_html
+from bot.services.security import validate_url_safe
 from bot.services.zap import ZapService
 
 logger = logging.getLogger(__name__)
@@ -25,6 +33,16 @@ zap_router = Router(name="zap_scanner")
 # Синглтоны сервисов
 _zap_service: ZapService | None = None
 _llm_advisor: LlmAdvisorService | None = None
+
+# Ограничение ресурсов: строго 1 сканирование одновременно
+_scan_semaphore = asyncio.Semaphore(1)
+
+# Кэш ожидающих подтверждения режима: {target_id: {"target_url": ..., "clean_origin": ...}}
+_pending_scans: dict[str, dict[str, Any]] = {}
+
+# Реестр активных сканирований для кнопки Stop:
+# {scan_token: {"spider_id": str, "ascan_id": str, "stop_event": asyncio.Event, "status_msg": Message}}
+_active_scans: dict[str, dict[str, Any]] = {}
 
 # Временный кэш результатов сканирования для AI-аудита: {cache_id: {"alerts": [...], "target_url": ...}}
 _audit_cache: dict[str, dict[str, Any]] = {}
@@ -47,25 +65,22 @@ def get_llm_advisor() -> LlmAdvisorService:
 
 def extract_clean_url(raw_text: str | None) -> str:
     """
-    Извлекает и нормализует URL из аргумента команды,
-    обрабатывая Markdown-ссылки вида [text](url), скобки и пробелы.
+    Извлекает и нормализует URL из аргумента команды или сообщения,
+    обрабатывая Markdown-ссылки, скобки и пробелы.
     """
     if not raw_text:
         return ""
 
     text = raw_text.strip()
 
-    # Если передана ссылка в формате Markdown: [любой_текст](https://example.com/...)
     md_match = re.search(r"\((https?://[^\s)]+)\)", text)
     if md_match:
         return md_match.group(1).strip()
 
-    # Если внутри текста есть стандартный URL с http:// или https://
     url_match = re.search(r"https?://[^\s\[\]\(\)\<\>\"']+", text)
     if url_match:
         return url_match.group(0).strip()
 
-    # Очистка от скобок и кавычек
     cleaned = text.strip("[]()<>'\" \t\n")
     if cleaned and not cleaned.startswith(("http://", "https://")):
         cleaned = "http://" + cleaned
@@ -82,10 +97,10 @@ def render_progress_bar(percent: int, length: int = 10) -> str:
 
 
 def is_admin(user_id: int) -> bool:
-    """Проверка прав администратора."""
-    if not settings or not settings.ADMIN_IDS:
+    """Проверка прав администратора / доступа."""
+    if not settings:
         return False
-    return user_id in settings.ADMIN_IDS
+    return settings.is_user_allowed(user_id)
 
 
 @zap_router.message(Command("zap_status"))
@@ -106,21 +121,21 @@ async def cmd_zap_status(message: Message) -> None:
 
 
 @zap_router.message(Command("check"))
-async def cmd_check(message: Message, command: CommandObject) -> None:
+@zap_router.message(F.text == "🛡 Проверить сайт")
+@zap_router.message(F.text.regexp(r"^https?://(?!github\.com)[^\s]+"))
+async def cmd_check(message: Message, command: CommandObject | None = None) -> None:
     """
-    Запуск оптимизированного аудита (Fast Scan):
-    1. Настройка Fast Scan опций ZAP (таймауты, потоки, глубина паука).
-    2. Предварительный прогрев через access_url и HTTP-прокси.
-    3. Паук (Spider, max_depth=2).
-    4. Обязательный Active Scan (recurse=False) с аварийным дедлайном 90 секунд.
-    5. ЭТАП 1: Выгрузка алертов по чистому origin, компактный список и кнопка вызова AI-аудита.
+    Первый шаг проверки: валидация URL, SSRF-фильтрация и предложение выбора глубины сканирования.
     """
     user = message.from_user
     if not user or not is_admin(user.id):
         await message.answer("⛔ <b>Доступ запрещен.</b> Проверку безопасности могут запускать только администраторы.")
         return
 
-    raw_args = command.args if command.args else ""
+    raw_args = command.args if command and command.args else (message.text or "")
+    if raw_args.strip() == "🛡 Проверить сайт":
+        raw_args = ""
+
     target_url = extract_clean_url(raw_args)
 
     if not target_url:
@@ -128,21 +143,29 @@ async def cmd_check(message: Message, command: CommandObject) -> None:
             "⚠️ <b>Укажите адрес веб-сайта для проверки!</b>\n\n"
             "Пример использования:\n"
             "<code>/check http://testphp.vulnweb.com/listproducts.php?cat=1</code>\n"
-            "<code>/check http://127.0.0.1:8000</code>"
+            "или просто отправьте ссылку в чат."
         )
         return
 
-    # Извлекаем схему, хост и чистый origin (схема + хост[:порт])
+    # 1. SSRF-фильтрация (DNS-резолв и проверка приватных диапазонов)
+    is_safe, error_reason, resolved_ip = await validate_url_safe(target_url)
+    if not is_safe:
+        await message.answer(
+            f"🛡 <b>Защита от SSRF: Запрос отклонен</b>\n\n"
+            f"❌ <b>Причина:</b> {html.escape(error_reason)}\n"
+            f"🎯 <b>Цель:</b> <code>{html.escape(target_url)}</code>\n\n"
+            f"<i>Сканирование локальных, приватных адресов и облачных метаданных строго запрещено.</i>"
+        )
+        return
+
+    # Извлекаем схему и clean origin
     try:
         parsed = urlparse(target_url)
         if not parsed.scheme or not parsed.netloc:
             raise ValueError("Invalid URL components")
         clean_origin = f"{parsed.scheme}://{parsed.netloc}"
     except Exception:
-        await message.answer(
-            "❌ <b>Некорректный формат адреса.</b>\n"
-            "Укажите правильный URL (например, <code>http://testphp.vulnweb.com</code>)."
-        )
+        await message.answer("❌ <b>Некорректный формат адреса.</b> Укажите правильный URL.")
         return
 
     zap = get_zap_service()
@@ -154,187 +177,369 @@ async def cmd_check(message: Message, command: CommandObject) -> None:
         )
         return
 
-    status_msg = await message.answer(
-        f"⚡ <b>Инициализация Fast Scan:</b>\n"
-        f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
-        f"⏳ Настройка лимитов скорости и прогрев дерева узлов..."
+    target_id = uuid.uuid4().hex[:10]
+    _pending_scans[target_id] = {
+        "target_url": target_url,
+        "clean_origin": clean_origin,
+        "created_at": time.time(),
+        "user_id": user.id,
+    }
+
+    resolved_note = f" (IP: <code>{resolved_ip}</code>)" if resolved_ip else ""
+    await message.answer(
+        f"🎯 <b>Цель подтверждена:</b> <code>{html.escape(target_url)}</code>{resolved_note}\n\n"
+        f"Выберите тип и глубину аудита безопасности:",
+        reply_markup=get_scan_mode_keyboard(target_id=target_id),
     )
 
-    try:
-        # 1. Применяем параметры Fast Scan к ZAP
-        await zap.configure_fast_scan()
 
-        # 2. Прогрев: предварительное посещение целевого URL
-        await zap.access_url(target_url)
+@zap_router.callback_query(ZapScanModeCallback.filter())
+async def handle_scan_mode_selection(
+    callback: CallbackQuery,
+    callback_data: ZapScanModeCallback,
+) -> None:
+    """
+    Обработчик выбора режима сканирования:
+    1) Пассивный (5-10 сек)
+    2) Быстрый (90 сек)
+    3) Глубокий (5-10 мин)
+    4) Отмена
+    """
+    mode = callback_data.mode
+    target_id = callback_data.target_id
 
-        # 3. Краулинг / Паук (Spider, max_depth=2)
-        spider_id = await zap.start_spider(target_url)
-        if not spider_id.isdigit():
-            spider_id = await zap.start_spider(clean_origin)
+    if mode == "cancel":
+        _pending_scans.pop(target_id, None)
+        if callback.message:
+            await callback.message.edit_text("❌ Сканирование отменено.")
+        await callback.answer("Отменено.")
+        return
 
-        if not spider_id.isdigit():
-            await status_msg.edit_text(
-                f"❌ <b>Не удалось запустить Spider для:</b> <code>{html.escape(target_url)}</code>\n"
-                f"Проверьте доступность сайта из сети."
-            )
-            return
+    scan_info = _pending_scans.pop(target_id, None)
+    if not scan_info:
+        await callback.answer("⚠️ Сессия выбора устарела. Отправьте URL заново.", show_alert=True)
+        return
 
-        last_spider_percent = -1
-        while True:
-            await asyncio.sleep(3)
-            percent = await zap.get_spider_status(spider_id)
-            if percent != last_spider_percent:
-                last_spider_percent = percent
-                try:
-                    await status_msg.edit_text(
-                        f"⚡ <b>Fast Scan веб-приложения:</b>\n"
-                        f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
-                        f"🕷 <b>Паук:</b> {render_progress_bar(percent)}"
-                    )
-                except TelegramRetryAfter as e:
-                    await asyncio.sleep(e.retry_after)
-                except TelegramBadRequest:
-                    pass
+    target_url = scan_info["target_url"]
+    clean_origin = scan_info["clean_origin"]
 
-            if percent >= 100:
-                break
-
-        # 4. Активное сканирование параметров (Active Scan, recurse=False) с дедлайном 90с
-        await status_msg.edit_text(
-            f"⚡ <b>Fast Scan веб-приложения:</b>\n"
-            f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
-            f"✔ <b>Паук:</b> 100%\n"
-            f"🔥 <b>Активное сканирование параметров:</b> {render_progress_bar(0)}"
+    # Проверка семафора ресурсов
+    if _scan_semaphore.locked():
+        await callback.answer(
+            "⚠️ Сканер уже выполняет другую задачу. Дождитесь ее завершения или остановите кнопкой Стоп.",
+            show_alert=True,
         )
+        return
 
-        ascan_id = await zap.start_active_scan(target_url=target_url, base_domain=clean_origin)
+    await callback.answer("🚀 Запуск сканирования...")
 
-        if not ascan_id.isdigit():
-            logger.warning("Active scan вернул '%s', повторный прогрев...", ascan_id)
+    scan_token = uuid.uuid4().hex[:8]
+    stop_event = asyncio.Event()
+
+    mode_titles = {
+        "passive": "🛡 Пассивный аудит (Passive Scan)",
+        "fast": "⚡ Быстрый аудит (Fast Scan, 90с)",
+        "full": "🔍 Глубокий аудит (Full Scan)",
+    }
+    mode_name = mode_titles.get(mode, "Аудит ZAP")
+
+    status_msg = await callback.message.edit_text(
+        f"<b>{mode_name}</b>\n"
+        f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
+        f"⏳ Инициализация сканера и прогрев дерева узлов...",
+        reply_markup=get_scan_stop_keyboard(token=scan_token),
+    )
+
+    # Регистрируем активный скан
+    _active_scans[scan_token] = {
+        "spider_id": "",
+        "ascan_id": "",
+        "stop_event": stop_event,
+        "status_msg": status_msg,
+        "user_id": callback.from_user.id,
+    }
+
+    # Запуск выполнения в фоне с захватом семафора
+    asyncio.create_task(
+        _execute_scan_worker(
+            scan_token=scan_token,
+            target_url=target_url,
+            clean_origin=clean_origin,
+            mode=mode,
+            mode_name=mode_name,
+            status_msg=status_msg,
+            stop_event=stop_event,
+            callback=callback,
+        )
+    )
+
+
+async def _execute_scan_worker(
+    scan_token: str,
+    target_url: str,
+    clean_origin: str,
+    mode: str,
+    mode_name: str,
+    status_msg: Message,
+    stop_event: asyncio.Event,
+    callback: CallbackQuery,
+) -> None:
+    """Фоновый воркер выполнения сканирования с семафором и кнопкой Stop."""
+    zap = get_zap_service()
+    deadline_hit = False
+
+    async with _scan_semaphore:
+        try:
+            # 1. Настройка профиля
+            if mode == "passive":
+                await zap.configure_passive_scan()
+            elif mode == "fast":
+                await zap.configure_fast_scan()
+            elif mode == "full":
+                await zap.configure_full_scan()
+
+            if stop_event.is_set():
+                return
+
+            # 2. Прогрев URL
             await zap.access_url(target_url)
-            await zap.access_url(clean_origin)
-            ascan_id = await zap.start_active_scan(target_url=clean_origin)
 
-        if not ascan_id.isdigit():
-            await status_msg.edit_text(
-                f"⚠️ <b>Активное сканирование не удалось запустить:</b> ZAP вернул статус <code>{html.escape(ascan_id)}</code>.\n"
-                f"Ресурс не вернул доступных страниц для аудита параметров."
-            )
-            return
+            if stop_event.is_set():
+                return
 
-        last_ascan_percent = -1
-        ascan_start_time = time.monotonic()
-        deadline_hit = False
+            # 3. Краулинг / Паук (Spider)
+            spider_id = await zap.start_spider(target_url)
+            if not spider_id.isdigit():
+                spider_id = await zap.start_spider(clean_origin)
 
-        while True:
-            await asyncio.sleep(3.5)
-            elapsed = time.monotonic() - ascan_start_time
+            if spider_id.isdigit():
+                _active_scans[scan_token]["spider_id"] = spider_id
+                last_spider_percent = -1
+                max_spider_time = 12 if mode == "passive" else 180
+                spider_start = time.monotonic()
 
-            # Аварийный дедлайн 90 секунд для Fast Scan
-            if elapsed > 90:
-                logger.warning("Active Scan превысил аварийный дедлайн 90 секунд. Принудительная остановка...")
-                deadline_hit = True
-                await zap.stop_all_scans()
-                break
+                while not stop_event.is_set():
+                    await asyncio.sleep(2.5)
+                    if time.monotonic() - spider_start > max_spider_time:
+                        await zap.stop_spider(spider_id)
+                        break
 
-            percent = await zap.get_active_scan_status(ascan_id)
-            if percent != last_ascan_percent:
-                last_ascan_percent = percent
+                    percent = await zap.get_spider_status(spider_id)
+                    if percent != last_spider_percent:
+                        last_spider_percent = percent
+                        try:
+                            await status_msg.edit_text(
+                                f"<b>{mode_name}</b>\n"
+                                f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
+                                f"🕷 <b>Паук:</b> {render_progress_bar(percent)}",
+                                reply_markup=get_scan_stop_keyboard(token=scan_token),
+                            )
+                        except (TelegramRetryAfter, TelegramBadRequest):
+                            pass
+
+                    if percent >= 100:
+                        break
+
+            if stop_event.is_set():
+                return
+
+            # 4. В пассивном режиме пропускаем активный скан инъекций
+            if mode == "passive":
                 try:
                     await status_msg.edit_text(
-                        f"⚡ <b>Fast Scan веб-приложения:</b>\n"
+                        f"<b>{mode_name}</b>\n"
                         f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
                         f"✔ <b>Паук:</b> 100%\n"
-                        f"🔥 <b>Активное сканирование параметров:</b> {render_progress_bar(percent)}"
+                        f"🛡 <b>Пассивный анализ заголовков и кук...</b>",
+                        reply_markup=get_scan_stop_keyboard(token=scan_token),
                     )
-                except TelegramRetryAfter as e:
-                    await asyncio.sleep(e.retry_after)
-                except TelegramBadRequest:
+                except Exception:
+                    pass
+                await zap.wait_for_passive_scan(timeout=8)
+
+            elif mode in ("fast", "full"):
+                if stop_event.is_set():
+                    return
+
+                try:
+                    await status_msg.edit_text(
+                        f"<b>{mode_name}</b>\n"
+                        f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
+                        f"✔ <b>Паук:</b> 100%\n"
+                        f"🔥 <b>Активное сканирование:</b> {render_progress_bar(0)}",
+                        reply_markup=get_scan_stop_keyboard(token=scan_token),
+                    )
+                except Exception:
                     pass
 
-            if percent >= 100:
-                break
+                recurse = (mode == "full")
+                ascan_id = await zap.start_active_scan(
+                    target_url=target_url,
+                    base_domain=clean_origin,
+                    recurse=recurse,
+                )
 
-        # 5. Выгрузка алертов по чистому origin
-        alerts_summary, alerts_list = await zap.get_alerts_summary(clean_origin=clean_origin)
-        html_report = await zap.generate_html_report()
+                if ascan_id.isdigit():
+                    _active_scans[scan_token]["ascan_id"] = ascan_id
+                    last_ascan_percent = -1
+                    ascan_start = time.monotonic()
+                    max_ascan_time = 90 if mode == "fast" else 600
 
-        # Сохраняем в кэш для 2-го этапа (AI-аудит)
-        cache_id = uuid.uuid4().hex[:12]
-        _audit_cache[cache_id] = {
-            "alerts": alerts_list,
-            "target_url": target_url,
-            "clean_origin": clean_origin,
-            "created_at": time.time(),
-        }
+                    while not stop_event.is_set():
+                        await asyncio.sleep(3.0)
+                        elapsed = time.monotonic() - ascan_start
 
-        # Формируем компактный список проблем с эмодзи
-        deduped = deduplicate_alerts(alerts_list)
-        risk_emojis = {
-            "High": "🔴",
-            "Medium": "🟠",
-            "Low": "🟡",
-            "Informational": "🔵",
-        }
+                        if elapsed > max_ascan_time:
+                            logger.warning("Active Scan превысил лимит времени %dc. Остановка...", max_ascan_time)
+                            deadline_hit = True
+                            await zap.stop_active_scan(ascan_id)
+                            break
 
-        issues_lines = []
-        for item in deduped:
-            r = str(item.get("risk", "Low")).capitalize()
-            emoji = risk_emojis.get(r, "⚪")
-            name = item.get("alert", "Неизвестная уязвимость")
-            param = f" (параметр: <code>{html.escape(item['param'])}</code>)" if item.get("param") else ""
-            issues_lines.append(f"{emoji} <b>[{r}]</b> {html.escape(name)}{param}")
+                        percent = await zap.get_active_scan_status(ascan_id)
+                        if percent != last_ascan_percent:
+                            last_ascan_percent = percent
+                            try:
+                                await status_msg.edit_text(
+                                    f"<b>{mode_name}</b>\n"
+                                    f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
+                                    f"✔ <b>Паук:</b> 100%\n"
+                                    f"🔥 <b>Активное сканирование:</b> {render_progress_bar(percent)}",
+                                    reply_markup=get_scan_stop_keyboard(token=scan_token),
+                                )
+                            except (TelegramRetryAfter, TelegramBadRequest):
+                                pass
 
-        if issues_lines:
-            issues_block = "\n".join(issues_lines)
-        else:
-            issues_block = "<i>Замечаний высокой и средней критичности не обнаружено.</i>"
+                        if percent >= 100:
+                            break
 
-        deadline_note = "\n⏱ <i>Fast Scan завершен по лимиту времени (90с).</i>" if deadline_hit else ""
+            if stop_event.is_set():
+                return
 
-        summary_text = (
-            f"✅ <b>Аудит безопасности завершен (Fast Scan)!</b>{deadline_note}\n\n"
-            f"🎯 <b>Цель:</b> <code>{html.escape(target_url)}</code>\n"
-            f"🌐 <b>Origin:</b> <code>{html.escape(clean_origin)}</code>\n\n"
-            f"📊 <b>Сводка уязвимостей:</b>\n"
-            f"🔴 Высокий риск (High): <b>{alerts_summary.get('High', 0)}</b>\n"
-            f"🟠 Средний риск (Medium): <b>{alerts_summary.get('Medium', 0)}</b>\n"
-            f"🟡 Низкий риск (Low): <b>{alerts_summary.get('Low', 0)}</b>\n"
-            f"🔵 Информационные: <b>{alerts_summary.get('Informational', 0)}</b>\n\n"
-            f"📋 <b>Ключевые обнаруженные проблемы:</b>\n"
-            f"{issues_block}\n\n"
-            f"📄 <i>Полный HTML-отчет ZAP прикреплен ниже.</i>\n"
-            f"Нажмите кнопку ниже для генерации AI-разбора и кода исправлений:"
-        )
+            # 5. Выгрузка результатов
+            alerts_summary, alerts_list = await zap.get_alerts_summary(clean_origin=clean_origin)
+            html_report = await zap.generate_html_report()
 
+            # Сохраняем в кэш для AI-аудита
+            cache_id = uuid.uuid4().hex[:12]
+            _audit_cache[cache_id] = {
+                "alerts": alerts_list,
+                "target_url": target_url,
+                "clean_origin": clean_origin,
+                "created_at": time.time(),
+            }
+
+            deduped = deduplicate_alerts(alerts_list)
+            risk_emojis = {
+                "High": "🔴",
+                "Medium": "🟠",
+                "Low": "🟡",
+                "Informational": "🔵",
+            }
+
+            issues_lines = []
+            for item in deduped:
+                r = str(item.get("risk", "Low")).capitalize()
+                emoji = risk_emojis.get(r, "⚪")
+                name = item.get("alert", "Неизвестная уязвимость")
+                param = f" (параметр: <code>{html.escape(item['param'])}</code>)" if item.get("param") else ""
+                issues_lines.append(f"{emoji} <b>[{r}]</b> {html.escape(name)}{param}")
+
+            issues_block = "\n".join(issues_lines) if issues_lines else "<i>Замечаний не обнаружено.</i>"
+            deadline_note = "\n⏱ <i>Сканирование завершено по лимиту времени.</i>" if deadline_hit else ""
+
+            summary_text = (
+                f"✅ <b>{mode_name} завершен!</b>{deadline_note}\n\n"
+                f"🎯 <b>Цель:</b> <code>{html.escape(target_url)}</code>\n"
+                f"🌐 <b>Origin:</b> <code>{html.escape(clean_origin)}</code>\n\n"
+                f"📊 <b>Сводка уязвимостей:</b>\n"
+                f"🔴 Высокий риск (High): <b>{alerts_summary.get('High', 0)}</b>\n"
+                f"🟠 Средний риск (Medium): <b>{alerts_summary.get('Medium', 0)}</b>\n"
+                f"🟡 Низкий риск (Low): <b>{alerts_summary.get('Low', 0)}</b>\n"
+                f"🔵 Информационные: <b>{alerts_summary.get('Informational', 0)}</b>\n\n"
+                f"📋 <b>Ключевые обнаруженные проблемы:</b>\n"
+                f"{issues_block}\n\n"
+                f"📄 <i>Полный HTML-отчет ZAP прикреплен ниже.</i>"
+            )
+
+            try:
+                await status_msg.edit_text(
+                    text=summary_text,
+                    reply_markup=get_ai_audit_keyboard(cache_id=cache_id),
+                )
+            except Exception:
+                await callback.message.answer(
+                    text=summary_text,
+                    reply_markup=get_ai_audit_keyboard(cache_id=cache_id),
+                )
+
+            # Отправляем HTML документ
+            parsed = urlparse(target_url)
+            clean_name = re.sub(r"[^a-zA-Z0-9_-]", "_", parsed.netloc)
+            report_filename = f"zap_report_{clean_name}.html"
+
+            await callback.message.answer_document(
+                document=BufferedInputFile(html_report, filename=report_filename),
+                caption=f"📋 Детальный HTML-отчет OWASP ZAP для <code>{html.escape(clean_origin)}</code>",
+            )
+
+        except Exception as exc:
+            logger.exception("Ошибка при выполнении ZAP аудита: %s", exc)
+            try:
+                await status_msg.edit_text(
+                    f"❌ <b>Произошла ошибка во время сканирования:</b>\n<code>{html.escape(str(exc))}</code>"
+                )
+            except Exception:
+                pass
+        finally:
+            _active_scans.pop(scan_token, None)
+
+
+@zap_router.callback_query(ZapScanStopCallback.filter())
+async def handle_scan_stop_callback(
+    callback: CallbackQuery,
+    callback_data: ZapScanStopCallback,
+) -> None:
+    """
+    Экстренная остановка активного сканирования по кнопке 'Стоп'.
+    """
+    token = callback_data.token
+    scan_ctx = _active_scans.get(token)
+
+    if not scan_ctx:
+        await callback.answer("Сканирование уже завершено или не найдено.", show_alert=True)
+        return
+
+    # Проверка прав: останавливать может запустивший пользователь или администратор
+    if callback.from_user.id != scan_ctx.get("user_id") and not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Только инициатор проверки или администратор может остановить скан.", show_alert=True)
+        return
+
+    scan_ctx["stop_event"].set()
+    zap = get_zap_service()
+
+    # Точечная остановка в ZAP API
+    spider_id = scan_ctx.get("spider_id")
+    ascan_id = scan_ctx.get("ascan_id")
+    if spider_id:
+        await zap.stop_spider(spider_id)
+    if ascan_id:
+        await zap.stop_active_scan(ascan_id)
+    await zap.stop_all_scans()
+
+    await callback.answer("🛑 Сканирование останавливается...", show_alert=False)
+
+    status_msg = scan_ctx.get("status_msg")
+    if status_msg:
         try:
             await status_msg.edit_text(
-                text=summary_text,
-                reply_markup=get_ai_audit_keyboard(cache_id=cache_id),
-            )
-        except Exception:
-            await message.answer(
-                text=summary_text,
-                reply_markup=get_ai_audit_keyboard(cache_id=cache_id),
-            )
-
-        # Отправляем HTML-отчет документом
-        clean_name = re.sub(r"[^a-zA-Z0-9_-]", "_", parsed.netloc)
-        report_filename = f"zap_report_{clean_name}.html"
-
-        await message.answer_document(
-            document=BufferedInputFile(html_report, filename=report_filename),
-            caption=f"📋 Детальный HTML-отчет OWASP ZAP для <code>{html.escape(clean_origin)}</code>",
-        )
-
-    except Exception as exc:
-        logger.exception("Ошибка при выполнении аудита ZAP: %s", exc)
-        try:
-            await status_msg.edit_text(
-                f"❌ <b>Произошла ошибка во время сканирования:</b>\n<code>{html.escape(str(exc))}</code>"
+                "⛔ <b>Сканирование принудительно остановлено пользователем.</b>\n"
+                "Все фоновые процессы ZAP Spider и Active Scan завершены, ресурсы освобождены.",
+                reply_markup=None,
             )
         except Exception:
             pass
+
+    _active_scans.pop(token, None)
 
 
 # --------------------------------------------------------------------------
@@ -348,19 +553,13 @@ async def handle_ai_audit_callback(
     callback_data: ZapAiAuditCallback,
 ) -> None:
     """
-    Обработка нажатия инлайн-кнопки «💡 Получить аудит и код исправлений от ИИ»:
-    - Защита от повторных нажатий: атомарно извлекает задачу из кэша и сразу скрывает кнопку.
-    - Отображает ChatAction.TYPING.
-    - Вызывает LLM Advisor для дедуплицированных алертов.
-    - Форматирует вывод в валидный Telegram HTML с красивым моноширинным шрифтом для кода и параметров.
-    - Отправляет рекомендации порциями до 4000 символов.
+    Обработка нажатия инлайн-кнопки «💡 Получить аудит и код исправлений от ИИ».
     """
     user = callback.from_user
     if not user or not is_admin(user.id):
         await callback.answer("⛔ Доступ запрещен.", show_alert=True)
         return
 
-    # 1. Защита от повторных нажатий: извлекаем данные из кэша один раз
     cache_data = _audit_cache.pop(callback_data.cache_id, None)
     if not cache_data:
         await callback.answer(
@@ -369,7 +568,6 @@ async def handle_ai_audit_callback(
         )
         return
 
-    # 2. Немедленно убираем inline-кнопку из сообщения, делая нажатие строго одноразовым
     if callback.message:
         try:
             await callback.message.edit_reply_markup(reply_markup=None)
@@ -378,56 +576,38 @@ async def handle_ai_audit_callback(
 
     await callback.answer("🧠 Запускаю анализ уязвимостей через нейросеть...")
 
-    chat_id = callback.message.chat.id if callback.message else user.id
-
-    # Фоновая задача обновления статуса "печатает..." в чате
-    async def _keep_typing():
+    if callback.message:
         try:
-            while True:
-                await callback.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-                await asyncio.sleep(4.5)
-        except asyncio.CancelledError:
+            await callback.message.bot.send_chat_action(
+                chat_id=callback.message.chat.id,
+                action=ChatAction.TYPING,
+            )
+        except Exception:
             pass
 
-    typing_task = asyncio.create_task(_keep_typing())
+    advisor = get_llm_advisor()
+    chunks = await advisor.analyze_vulnerabilities(
+        alerts=cache_data["alerts"],
+        target_url=cache_data["target_url"],
+    )
 
-    try:
-        advisor = get_llm_advisor()
-        advice_chunks = await advisor.analyze_vulnerabilities(
-            alerts=cache_data["alerts"],
-            target_url=cache_data["target_url"],
-        )
-    finally:
-        typing_task.cancel()
+    chat_id = callback.message.chat.id if callback.message else user.id
 
-    # Если нейросеть временно перегружена или вернула ошибку
-    is_error = not advice_chunks or any("⚠️" in ch and ("недоступна" in ch.lower() or "квоты" in ch.lower()) for ch in advice_chunks)
-    if is_error:
-        retry_cache_id = uuid.uuid4().hex[:12]
-        _audit_cache[retry_cache_id] = cache_data
-        retry_kb = get_ai_audit_keyboard(cache_id=retry_cache_id, text="🔄 Повторить генерацию аудита")
-        err_msg = advice_chunks[0] if advice_chunks else "⚠️ <b>Нейросеть временно недоступна.</b>"
-        await callback.bot.send_message(
-            chat_id=chat_id,
-            text=f"{err_msg}\n\n<i>Нажмите кнопку ниже, чтобы повторить запрос к ИИ без повторного сканирования:</i>",
-            reply_markup=retry_kb,
-            parse_mode="HTML",
-        )
-        return
-
-    # Отправляем результаты частями с гарантией валидной типографики (шрифт, цитаты, код)
-    for chunk in advice_chunks:
-        formatted_html = format_telegram_html(chunk)
+    for chunk in chunks:
+        clean_chunk = format_telegram_html(chunk)
         try:
             await callback.bot.send_message(
                 chat_id=chat_id,
-                text=formatted_html,
+                text=clean_chunk,
                 parse_mode="HTML",
+                disable_web_page_preview=True,
             )
-        except Exception as e:
-            logger.warning("Ошибка парсинга Telegram HTML при отправке аудита (%s), fallback на текст: %s", e, formatted_html[:150])
+        except Exception as exc:
+            logger.warning("Сбой HTML-разметки сообщения Gemini, fallback на plain-text: %s", exc)
+            plain_text = re.sub(r"<[^>]+>", "", clean_chunk)
             await callback.bot.send_message(
                 chat_id=chat_id,
-                text=chunk,
-                parse_mode=None,
+                text=plain_text[:4000],
+                disable_web_page_preview=True,
             )
+        await asyncio.sleep(0.3)

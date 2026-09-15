@@ -56,3 +56,59 @@ def get_ai_audit_keyboard(
         callback_data=ZapAiAuditCallback(cache_id=cache_id),
     )
     return builder.as_markup()
+
+
+class ZapScanModeCallback(CallbackData, prefix="zap_mode"):
+    """
+    Коллбэк выбора типа/глубины сканирования (DAST).
+    """
+    mode: str       # "passive", "fast", "full", "cancel"
+    target_id: str  # id записи в FSM/кэше
+
+
+def get_scan_mode_keyboard(target_id: str) -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора глубины сканирования:
+    1) 🛡 Пассивный (Passive, 5-10 сек)
+    2) ⚡ Быстрый (Fast, 90 сек)
+    3) 🔍 Глубокий (Full, 5-10 мин)
+    4) ❌ Отмена
+    """
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🛡 Пассивный (5-10 сек)",
+        callback_data=ZapScanModeCallback(mode="passive", target_id=target_id),
+    )
+    builder.button(
+        text="⚡ Быстрый (90 сек)",
+        callback_data=ZapScanModeCallback(mode="fast", target_id=target_id),
+    )
+    builder.button(
+        text="🔍 Глубокий (5-10 мин)",
+        callback_data=ZapScanModeCallback(mode="full", target_id=target_id),
+    )
+    builder.button(
+        text="❌ Отмена",
+        callback_data=ZapScanModeCallback(mode="cancel", target_id=target_id),
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+class ZapScanStopCallback(CallbackData, prefix="zap_stop"):
+    """
+    Коллбэк принудительной остановки сканирования.
+    """
+    token: str
+
+
+def get_scan_stop_keyboard(token: str) -> InlineKeyboardMarkup:
+    """
+    Клавиатура со статусом выполнения и кнопкой остановки сканирования.
+    """
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🛑 Остановить сканирование",
+        callback_data=ZapScanStopCallback(token=token),
+    )
+    return builder.as_markup()

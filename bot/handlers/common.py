@@ -57,11 +57,15 @@ async def cmd_check_hint(message: Message) -> None:
     """
     await message.answer(
         "🛡 <b>Запуск аудита безопасности:</b>\n\n"
-        "Отправьте команду с адресом целевого сайта:\n"
-        "<code>/check &lt;URL&gt;</code>\n\n"
-        "<i>Пример:</i>\n"
-        "<code>/check http://testphp.vulnweb.com/listproducts.php?cat=1</code>\n\n"
-        "После сканирования нажмите кнопку <b>«💡 Получить аудит и код исправлений от ИИ»</b> для анализа уязвимостей.",
+        "1️⃣ <b>DAST (OWASP ZAP):</b>\n"
+        "Отправьте команду или ссылку на сайт:\n"
+        "<code>/check &lt;URL&gt;</code>\n"
+        "<i>Пример:</i> <code>/check http://testphp.vulnweb.com</code>\n"
+        "Вам будет предложен выбор режима: <b>Пассивный</b>, <b>Быстрый</b> или <b>Глубокий</b>, а также кнопка экстренной остановки (Стоп).\n\n"
+        "2️⃣ <b>SAST (GitHub + OSV.dev):</b>\n"
+        "Отправьте ссылку на репозиторий GitHub:\n"
+        "<code>https://github.com/pallets/jinja</code>\n"
+        "Бот проанализирует зависимости (Python / Node.js) на известные CVE и баллы CVSS.",
         reply_markup=get_main_menu_keyboard(),
     )
 
@@ -74,20 +78,24 @@ async def cmd_help(message: Message) -> None:
     """
     help_text = (
         "📖 <b>Справка ZAP AppSec AI Auditor:</b>\n\n"
-        "/start — Главное меню и перезапуск\n"
+        "/start — Главное меню и статус\n"
         "/help — Вывод этого справочного сообщения\n"
-        "/zap_status — Проверка статуса подключения к ZAP\n\n"
-        "🛡 <b>Аудит безопасности веб-сайтов (OWASP ZAP):</b>\n"
-        "/check &lt;URL&gt; — Запуск сканирования и аудита уязвимостей\n"
-        "<i>Пример:</i> <code>/check http://testphp.vulnweb.com/listproducts.php?cat=1</code>\n\n"
-        "💡 <b>AI-аудит (Gemini):</b>\n"
-        "• ИИ-ассистент работает в связке со сканером.\n"
-        "• После выполнения <code>/check</code> нажмите кнопку <b>«💡 Получить аудит и код исправлений от ИИ»</b>, чтобы нейросеть сгенерировала простое объяснение рисков и готовый промпт для AI-агентов кодогенерации (/goal).\n\n"
-        "Кнопки нижнего меню:\n"
-        "• <b>🛡 Проверить сайт</b> — вызов сканирования\n"
-        "• <b>🔍 Статус ZAP</b> — проверка доступности сканера\n"
-        "• <b>👤 Мой профиль</b> — учетная запись\n"
-        "• <b>ℹ️ Помощь</b> — данная справка"
+        "/zap_status — Проверка статуса демона OWASP ZAP\n\n"
+        "🛡 <b>1. Динамический анализ (DAST / OWASP ZAP):</b>\n"
+        "• <code>/check &lt;URL&gt;</code> или прямая ссылка на сайт\n"
+        "• <b>Выбор глубины:</b>\n"
+        "  - <i>Пассивный</i> (5–10 сек): заголовки, куки, CSP без инъекций\n"
+        "  - <i>Быстрый</i> (90 сек): Spider + Active Scan с лимитом времени\n"
+        "  - <i>Глубокий</i> (5–10 мин): полный краулинг и сканирование\n"
+        "• <b>🛑 Кнопка 'Стоп':</b> мгновенная остановка паука и сканера\n"
+        "• <b>💡 ИИ-аудит (Gemini):</b> карточки уязвимостей и готовые задачи <code>/goal</code> для AI-агентов\n\n"
+        "📦 <b>2. Статический анализ зависимостей (SAST / OSV.dev):</b>\n"
+        "• Отправьте ссылку на GitHub: <code>https://github.com/owner/repo</code>\n"
+        "• Проверка <code>requirements.txt</code> и <code>package.json</code>\n"
+        "• Отображение CVE/GHSA, числового балла CVSS (Critical/High/Medium/Low) и безопасной версии (Fixed in)\n\n"
+        "🔒 <b>3. Защита периметра (Hardening):</b>\n"
+        "• <b>SSRF-фильтр:</b> блокировка сканирования локальных сетей (RFC 1918, 127.0.0.0/8, 169.254.169.254)\n"
+        "• <b>Admin Whitelist:</b> проверка доступа по списку <code>ALLOWED_USERS</code>"
     )
     await message.answer(text=help_text, reply_markup=get_main_menu_keyboard())
 

@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     # Список Telegram ID администраторов (принимает строку, число или список, возвращает list[int])
     ADMIN_IDS: Union[list[int], str, int] = []
 
+    # Список разрешенных пользователей (Whitelist). Если задан, доступ имеют только эти ID и ADMIN_IDS.
+    ALLOWED_USERS: Union[list[int], str, int] = []
 
     # Уровень логирования
     LOG_LEVEL: str = "INFO"
@@ -40,6 +42,16 @@ class Settings(BaseSettings):
     def zap_endpoint(self) -> str:
         return self.ZAP_PROXY or self.ZAP_URL
 
+    def is_user_allowed(self, user_id: int) -> bool:
+        """Проверяет, разрешен ли доступ пользователю по Whitelist и Admin спискам."""
+        allowed: set[int] = set()
+        if isinstance(self.ADMIN_IDS, list):
+            allowed.update(self.ADMIN_IDS)
+        if isinstance(self.ALLOWED_USERS, list):
+            allowed.update(self.ALLOWED_USERS)
+        if not allowed:
+            return True
+        return user_id in allowed
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -47,11 +59,11 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("ADMIN_IDS")
+    @field_validator("ADMIN_IDS", "ALLOWED_USERS", mode="before")
     @classmethod
     def parse_admin_ids(cls, v: Any) -> list[int]:
         """
-        Позволяет задавать ADMIN_IDS как списком JSON ([123, 456]),
+        Позволяет задавать ADMIN_IDS и ALLOWED_USERS как списком JSON ([123, 456]),
         так и строкой через запятую ("123, 456, 789").
         """
         if isinstance(v, str):

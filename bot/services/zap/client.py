@@ -32,6 +32,19 @@ class ZapService:
             logger.error("Ошибка подключения к OWASP ZAP API: %s", e)
             return False
 
+    async def configure_passive_scan(self) -> None:
+        """
+        Конфигурирует ZAP для пассивного режима (только анализ заголовков, cookies, CSP без инъекций):
+        - Паук с минимальной глубиной (depth=1)
+        """
+        def _configure() -> None:
+            try:
+                self._zap.spider.set_option_max_depth(1)
+            except Exception as e:
+                logger.warning("Не удалось настроить spider max_depth для Passive Scan: %s", e)
+        await asyncio.to_thread(_configure)
+        logger.info("Параметры Passive Scan успешно применены к ZAP.")
+
     async def configure_fast_scan(self) -> None:
         """
         Конфигурирует ZAP для режима быстрого сканирования (Fast Scan):
@@ -65,6 +78,51 @@ class ZapService:
 
         await asyncio.to_thread(_configure)
         logger.info("Параметры Fast Scan успешно применены к ZAP.")
+
+    async def configure_full_scan(self) -> None:
+        """
+        Конфигурирует ZAP для режима глубокого сканирования (Full Scan):
+        - Глубина паука: 5
+        - Время на правило: 5 минут
+        - Максимальное время сканирования: 15 минут
+        - Потоков на хост: 10
+        """
+        def _configure() -> None:
+            try:
+                self._zap.ascan.set_option_max_rule_duration_in_mins(5)
+            except Exception as e:
+                logger.warning("Не удалось установить max_rule_duration_in_mins: %s", e)
+            try:
+                self._zap.ascan.set_option_max_scan_duration_in_mins(15)
+            except Exception as e:
+                logger.warning("Не удалось установить max_scan_duration_in_mins: %s", e)
+            try:
+                self._zap.ascan.set_option_thread_per_host(10)
+            except Exception as e:
+                logger.warning("Не удалось установить thread_per_host: %s", e)
+            try:
+                self._zap.ascan.set_option_host_per_scan(2)
+            except Exception as e:
+                logger.warning("Не удалось установить host_per_scan: %s", e)
+            try:
+                self._zap.spider.set_option_max_depth(5)
+            except Exception as e:
+                logger.warning("Не удалось установить max_depth: %s", e)
+
+        await asyncio.to_thread(_configure)
+        logger.info("Параметры Full Scan успешно применены к ZAP.")
+
+    async def wait_for_passive_scan(self, timeout: int = 10) -> None:
+        """Ожидание завершения очереди записей пассивного сканера ZAP."""
+        start_t = asyncio.get_running_loop().time()
+        while asyncio.get_running_loop().time() - start_t < timeout:
+            try:
+                records = await asyncio.to_thread(lambda: int(self._zap.pscan.records_to_scan))
+                if records <= 0:
+                    break
+            except Exception:
+                break
+            await asyncio.sleep(1)
 
     async def access_url(self, target_url: str) -> None:
         """
@@ -110,20 +168,25 @@ class ZapService:
             logger.warning("Ошибка получения статуса Spider %s: %s", scan_id, e)
             return 100
 
-    async def start_active_scan(self, target_url: str, base_domain: str | None = None) -> str:
+    async def start_active_scan(
+        self,
+        target_url: str,
+        base_domain: str | None = None,
+        recurse: bool = False,
+    ) -> str:
         """
-        Запуск активного сканирования (Active Scan) в режиме Fast Scan (recurse=False, inscopeonly=False).
-        Если целевой leaf URL возвращает url_not_found, пробуем сканировать от base_domain.
+        Запуск активного сканирования (Active Scan).
+        Параметр recurse определяет глубину рекурсии сканирования ссылок.
         """
         try:
             scan_id = await asyncio.to_thread(
                 self._zap.ascan.scan,
                 url=target_url,
-                recurse=False,
+                recurse=recurse,
                 inscopeonly=False,
             )
             scan_id_str = str(scan_id)
-            logger.info("Запуск Fast Active Scan (recurse=False) для %s -> результат: %s", target_url, scan_id_str)
+            logger.info("Запуск Active Scan (recurse=%s) для %s -> результат: %s", recurse, target_url, scan_id_str)
 
             # Если вернулась ошибка url_not_found и указан базовый домен, запускаем от корня домена
             if (not scan_id_str.isdigit()) and base_domain and base_domain != target_url:
@@ -131,7 +194,7 @@ class ZapService:
                 fallback_scan_id = await asyncio.to_thread(
                     self._zap.ascan.scan,
                     url=base_domain,
-                    recurse=False,
+                    recurse=recurse,
                     inscopeonly=False,
                 )
                 scan_id_str = str(fallback_scan_id)
@@ -153,11 +216,31 @@ class ZapService:
             logger.warning("Ошибка получения статуса Active Scan %s: %s", scan_id, e)
             return 100
 
+    async def stop_spider(self, scan_id: str) -> None:
+        """Останавливает конкретный запущенный процесс Spider по ID."""
+        if not scan_id or not scan_id.isdigit():
+            return
+        try:
+            await asyncio.to_thread(self._zap.spider.stop, scan_id)
+            logger.info("Паук ZAP (Spider ID: %s) успешно остановлен.", scan_id)
+        except Exception as e:
+            logger.warning("Ошибка остановки Spider %s: %s", scan_id, e)
+
+    async def stop_active_scan(self, scan_id: str) -> None:
+        """Останавливает конкретный запущенный процесс Active Scan по ID."""
+        if not scan_id or not scan_id.isdigit():
+            return
+        try:
+            await asyncio.to_thread(self._zap.ascan.stop, scan_id)
+            logger.info("Active Scan ZAP (ID: %s) успешно остановлен.", scan_id)
+        except Exception as e:
+            logger.warning("Ошибка остановки Active Scan %s: %s", scan_id, e)
+
     async def stop_all_scans(self) -> None:
-        """Аварийная остановка всех сканирований при наступлении дедлайна."""
+        """Аварийная остановка всех сканирований."""
         try:
             await asyncio.to_thread(self._zap.ascan.stop_all_scans)
-            logger.info("Вызвана аварийная остановка активных сканирований ZAP.")
+            logger.info("Вызвана остановка всех активных сканирований ZAP.")
         except Exception as e:
             logger.warning("Ошибка при вызове ascan.stop_all_scans: %s", e)
         try:

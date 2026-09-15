@@ -141,6 +141,25 @@ def split_text_safe(text: str, max_chunk_size: int = 4000) -> list[str]:
     return chunks
 
 
+def sanitize_text_for_llm(text: Any, max_len: int = 250) -> str:
+    """
+    Санитизирует данные перед отправкой в промпт нейросети:
+    - Удаляет HTML-теги (<script>, <img ...>, <div> и др.)
+    - Удаляет base64-строки и бинарные последовательности
+    - Ограничивает длину и убирает спецсимволы разметки
+    """
+    if not text:
+        return ""
+    val = str(text).strip()
+    # Удаление HTML-тегов
+    val = re.sub(r"<[^>]+>", " ", val)
+    # Удаление длинных base64 последовательностей
+    val = re.sub(r"[A-Za-z0-9+/=]{60,}", "[DATA_TRUNCATED]", val)
+    # Удаление множественных пробелов и переносов
+    val = re.sub(r"\s+", " ", val).strip()
+    return val[:max_len]
+
+
 class LlmAdvisorService:
     """
     Асинхронный сервис AI-аудита безопасности веб-приложений через Google Gemini API.
@@ -157,8 +176,8 @@ class LlmAdvisorService:
         target_url: str,
     ) -> list[str]:
         """
-        Принимает сырой список алертов ZAP, выполняет дедупликацию, формирует запрос к LLM
-        и возвращает список сообщений-рекомендаций, разбитых на безопасные части до 4000 символов.
+        Принимает сырой список алертов ZAP, выполняет дедупликацию, выполняет санитизацию,
+        формирует запрос к LLM и возвращает список сообщений-рекомендаций.
         """
         filtered_alerts = deduplicate_alerts(alerts)
         if not filtered_alerts:
@@ -174,17 +193,17 @@ class LlmAdvisorService:
                 "Пожалуйста, добавьте ключ для получения автоматических рекомендаций по коду."
             ]
 
-        # Формируем компактное описание уязвимостей для промпта
+        # Формируем строго санитизированное описание уязвимостей для промпта (без сырого HTML/JS)
         items_desc = []
         for idx, item in enumerate(filtered_alerts, 1):
-            alert_name = item.get("alert", "Unknown")
-            risk = item.get("risk", "Low")
-            param = item.get("param") or "—"
-            url = item.get("url", target_url)
-            method = item.get("method") or "GET"
-            cwe = item.get("cweid", "—")
-            desc = item.get("description", "")[:300].replace("\n", " ")
-            evidence = item.get("evidence", "")[:120]
+            alert_name = sanitize_text_for_llm(item.get("alert", "Unknown"), 120)
+            risk = sanitize_text_for_llm(item.get("risk", "Low"), 30)
+            param = sanitize_text_for_llm(item.get("param", ""), 80) or "—"
+            url = sanitize_text_for_llm(item.get("url", target_url), 200)
+            method = sanitize_text_for_llm(item.get("method", "GET"), 10)
+            cwe = sanitize_text_for_llm(item.get("cweid", "—"), 20)
+            desc = sanitize_text_for_llm(item.get("description", ""), 250)
+            evidence = sanitize_text_for_llm(item.get("evidence", ""), 100)
 
             items_desc.append(
                 f"### Уязвимость #{idx}: {alert_name} (Риск: {risk})\n"
@@ -192,8 +211,8 @@ class LlmAdvisorService:
                 f"- HTTP Метод: {method}\n"
                 f"- Уязвимый параметр / заголовок / селектор: {param}\n"
                 f"- CWE ID: {cwe}\n"
-                f"- Evidence / фрагмент ответа сканера: {evidence if evidence else 'Не указано'}\n"
-                f"- Описание сканера ZAP: {desc}\n"
+                f"- Evidence (фрагмент детекции): {evidence if evidence else 'Не указано'}\n"
+                f"- Техническое описание проблемы: {desc}\n"
             )
 
         prompt_body = (

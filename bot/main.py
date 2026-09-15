@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from bot.config import settings
 from bot.config.config import get_settings
 from bot.handlers import get_root_router
-from bot.middlewares import ThrottlingMiddleware
+from bot.middlewares import ThrottlingMiddleware, WhitelistMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,12 @@ async def main() -> None:
     dp = Dispatcher(storage=storage)
 
     # 5. Регистрация Middlewares
-    # Антиспам (внешний мидлварь)
+    # Защита периметра (Whitelist & Admin check)
+    whitelist = WhitelistMiddleware()
+    dp.message.outer_middleware(whitelist)
+    dp.callback_query.outer_middleware(whitelist)
+
+    # Антиспам (Rate Limiting)
     throttling = ThrottlingMiddleware(rate_limit=cfg.THROTTLE_RATE)
     dp.message.outer_middleware(throttling)
     dp.callback_query.outer_middleware(throttling)
