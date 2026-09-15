@@ -96,11 +96,32 @@ else
 fi
 
 # 5. Очистка старых экземпляров бота и освобождение порта 8000 (FastAPI/Uvicorn)
+echo "🧹 Освобождение порта 8000..."
 pkill -f "python.*main\.py" >/dev/null 2>&1 || true
+pkill -f "uvicorn" >/dev/null 2>&1 || true
+
+# Попытка 1: lsof + kill -9 (надёжнее всего)
+if command -v lsof >/dev/null 2>&1; then
+    PIDS=$(lsof -ti :8000 2>/dev/null | tr '\n' ' ')
+    if [ -n "$PIDS" ]; then
+        echo "⚡ Принудительное завершение PID: $PIDS"
+        kill -9 $PIDS 2>/dev/null || true
+    fi
+fi
+
+# Попытка 2: fuser как дополнительный метод
 if command -v fuser >/dev/null 2>&1; then
     fuser -k -9 8000/tcp >/dev/null 2>&1 || true
 fi
-sleep 1
+
+# Ждём освобождения сокета (TIME_WAIT требует min 1 сек)
+sleep 2
+
+# Финальная проверка: если порт всё ещё занят — ждём ещё
+if command -v lsof >/dev/null 2>&1 && lsof -ti :8000 >/dev/null 2>&1; then
+    echo "⏳ Порт 8000 ещё занят, ждём дополнительно..."
+    sleep 3
+fi
 
 # 6. Запуск Telegram-бота на переднем плане
 echo "🤖 Запуск Telegram-бота (main.py)..."

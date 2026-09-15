@@ -157,6 +157,9 @@ async def main() -> None:
             host=cfg.WEBAPP_HOST,
             port=cfg.WEBAPP_PORT,
             log_level="warning",
+            # Немедленное завершение без ожидания graceful shutdown при рестарте
+            # Это позволяет сокету освободиться до следующего запуска
+            timeout_graceful_shutdown=0,
         )
         server = uvicorn.Server(uvicorn_config)
 
