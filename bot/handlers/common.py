@@ -1,6 +1,7 @@
 import html
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.keyboards.inline import (
@@ -8,6 +9,7 @@ from bot.keyboards.inline import (
     get_welcome_inline_keyboard,
 )
 from bot.keyboards.reply import get_main_menu_keyboard
+from bot.utils.ui import update_screen
 
 common_router = Router(name="common")
 
@@ -18,10 +20,11 @@ common_router = Router(name="common")
 
 
 @common_router.message(CommandStart())
-async def cmd_start(message: Message) -> None:
+async def cmd_start(message: Message, state: FSMContext) -> None:
     """
     Обработчик команды /start.
     Выводит приветственное сообщение со всеми возможностями бота и стартовое меню.
+    Удаляет входящую команду и предыдущее сообщение бота для чистого экрана.
     """
     user = message.from_user
     if not user:
@@ -54,18 +57,20 @@ async def cmd_start(message: Message) -> None:
         "<i>Отправьте ссылку на сайт или GitHub-репозиторий для начала аудита:</i>"
     )
 
-    await message.answer(
+    await update_screen(
+        event=message,
+        state=state,
         text=welcome_text,
         reply_markup=get_main_menu_keyboard(),
     )
 
 
 @common_router.message(F.text == "🛡 Проверить сайт")
-async def cmd_check_hint(message: Message) -> None:
+async def cmd_check_hint(message: Message, state: FSMContext) -> None:
     """
     Подсказка по запуску проверки при нажатии кнопки в меню.
     """
-    await message.answer(
+    text = (
         "🛡 <b>Запуск аудита безопасности:</b>\n\n"
         "1️⃣ <b>DAST (OWASP ZAP):</b>\n"
         "Отправьте команду или ссылку на сайт:\n"
@@ -75,14 +80,19 @@ async def cmd_check_hint(message: Message) -> None:
         "2️⃣ <b>SAST (GitHub + OSV.dev):</b>\n"
         "Отправьте ссылку на репозиторий GitHub:\n"
         "<code>https://github.com/pallets/jinja</code>\n"
-        "Бот проанализирует зависимости (Python / Node.js) на известные CVE и баллы CVSS.",
+        "Бот проанализирует зависимости (Python / Node.js) на известные CVE и баллы CVSS."
+    )
+    await update_screen(
+        event=message,
+        state=state,
+        text=text,
         reply_markup=get_main_menu_keyboard(),
     )
 
 
 @common_router.message(Command("help"))
 @common_router.message(F.text == "ℹ️ Помощь")
-async def cmd_help(message: Message) -> None:
+async def cmd_help(message: Message, state: FSMContext) -> None:
     """
     Обработчик команды /help и кнопки 'ℹ️ Помощь'.
     """
@@ -107,7 +117,12 @@ async def cmd_help(message: Message) -> None:
         "• <b>SSRF-фильтр:</b> блокировка сканирования локальных сетей (RFC 1918, 127.0.0.0/8, 169.254.169.254)\n"
         "• <b>Admin Whitelist:</b> проверка доступа по списку <code>ALLOWED_USERS</code>"
     )
-    await message.answer(text=help_text, reply_markup=get_main_menu_keyboard())
+    await update_screen(
+        event=message,
+        state=state,
+        text=help_text,
+        reply_markup=get_main_menu_keyboard(),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -116,7 +131,7 @@ async def cmd_help(message: Message) -> None:
 
 
 @common_router.message(F.text == "👤 Мой профиль")
-async def cmd_profile(message: Message) -> None:
+async def cmd_profile(message: Message, state: FSMContext) -> None:
     """
     Выводит информацию о текущем пользователе Telegram.
     """
@@ -130,7 +145,12 @@ async def cmd_profile(message: Message) -> None:
         f"• <b>Username:</b> @{html.escape(user.username or 'не указан')}\n"
         f"• <b>Имя:</b> {html.escape(user.full_name)}"
     )
-    await message.answer(text=profile_text)
+    await update_screen(
+        event=message,
+        state=state,
+        text=profile_text,
+        reply_markup=get_main_menu_keyboard(),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -139,9 +159,9 @@ async def cmd_profile(message: Message) -> None:
 
 
 @common_router.callback_query(MenuActionCallback.filter(F.action == "features"))
-async def callback_features(callback: CallbackQuery) -> None:
+async def callback_features(callback: CallbackQuery, state: FSMContext) -> None:
     """
-    Показывает возможности сканера.
+    Показывает возможности сканера на месте.
     """
     text = (
         "🛡️ <b>Возможности ZAP AppSec AI Auditor:</b>\n\n"
@@ -150,15 +170,17 @@ async def callback_features(callback: CallbackQuery) -> None:
         "• <b>Детальные HTML-отчеты:</b> Мгновенная генерация полного отчета ZAP файлом.\n"
         "• <b>Автономность и скорость:</b> Асинхронный aiogram 3.x, работа без БД, защита от спама."
     )
-    if callback.message:
-        await callback.message.answer(text)
-    await callback.answer()
+    await update_screen(
+        event=callback,
+        state=state,
+        text=text,
+    )
 
 
 @common_router.callback_query(MenuActionCallback.filter(F.action == "stats"))
 async def callback_stats(callback: CallbackQuery) -> None:
     """
-    Выводит статус режима работы бота.
+    Выводит статус режима работы бота во всплывающем окне.
     """
     await callback.answer(
         text="⚡ Бот работает в быстром автономном режиме (без БД).",
@@ -172,5 +194,8 @@ async def callback_close(callback: CallbackQuery) -> None:
     Удаляет сообщение с инлайн-кнопками.
     """
     if callback.message:
-        await callback.message.delete()
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
     await callback.answer()

@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from aiogram import F, Router
 from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandObject
+from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 
@@ -25,6 +26,7 @@ from bot.keyboards.inline import (
 from bot.services.ai import LlmAdvisorService, deduplicate_alerts, format_telegram_html
 from bot.services.security import validate_url_safe
 from bot.services.zap import ZapService
+from bot.utils.ui import safe_edit_message, track_extra_message, update_screen
 
 logger = logging.getLogger(__name__)
 
@@ -105,31 +107,52 @@ def is_admin(user_id: int) -> bool:
 
 @zap_router.message(Command("zap_status"))
 @zap_router.message(F.text == "🔍 Статус ZAP")
-async def cmd_zap_status(message: Message) -> None:
+async def cmd_zap_status(message: Message, state: FSMContext) -> None:
     """Проверка статуса подключения к OWASP ZAP."""
     if not message.from_user or not is_admin(message.from_user.id):
-        await message.answer("⛔ <b>Доступ запрещен.</b> Команда доступна только администраторам.")
+        await update_screen(
+            event=message,
+            state=state,
+            text="⛔ <b>Доступ запрещен.</b> Команда доступна только администраторам.",
+        )
         return
 
     zap = get_zap_service()
     is_alive = await zap.check_health()
     endpoint = settings.zap_endpoint if settings else "http://zap:8080"
     if is_alive:
-        await message.answer(f"✅ <b>OWASP ZAP готов к работе!</b>\nАдрес: <code>{endpoint}</code>")
+        await update_screen(
+            event=message,
+            state=state,
+            text=f"✅ <b>OWASP ZAP готов к работе!</b>\nАдрес: <code>{endpoint}</code>",
+        )
     else:
-        await message.answer(f"❌ <b>OWASP ZAP недоступен.</b>\nПроверьте, запущен ли демон на <code>{endpoint}</code>.")
+        await update_screen(
+            event=message,
+            state=state,
+            text=f"❌ <b>OWASP ZAP недоступен.</b>\nПроверьте, запущен ли демон на <code>{endpoint}</code>.",
+        )
 
 
 @zap_router.message(Command("check"))
 @zap_router.message(F.text == "🛡 Проверить сайт")
 @zap_router.message(F.text.regexp(r"^https?://(?!github\.com)[^\s]+"))
-async def cmd_check(message: Message, command: CommandObject | None = None) -> None:
+async def cmd_check(
+    message: Message,
+    state: FSMContext,
+    command: CommandObject | None = None,
+) -> None:
     """
     Первый шаг проверки: валидация URL, SSRF-фильтрация и предложение выбора глубины сканирования.
+    Удаляет входящее сообщение и выводит выбор глубины на едином экране.
     """
     user = message.from_user
     if not user or not is_admin(user.id):
-        await message.answer("⛔ <b>Доступ запрещен.</b> Проверку безопасности могут запускать только администраторы.")
+        await update_screen(
+            event=message,
+            state=state,
+            text="⛔ <b>Доступ запрещен.</b> Проверку безопасности могут запускать только администраторы.",
+        )
         return
 
     raw_args = command.args if command and command.args else (message.text or "")
@@ -139,22 +162,30 @@ async def cmd_check(message: Message, command: CommandObject | None = None) -> N
     target_url = extract_clean_url(raw_args)
 
     if not target_url:
-        await message.answer(
-            "⚠️ <b>Укажите адрес веб-сайта для проверки!</b>\n\n"
-            "Пример использования:\n"
-            "<code>/check http://testphp.vulnweb.com/listproducts.php?cat=1</code>\n"
-            "или просто отправьте ссылку в чат."
+        await update_screen(
+            event=message,
+            state=state,
+            text=(
+                "⚠️ <b>Укажите адрес веб-сайта для проверки!</b>\n\n"
+                "Пример использования:\n"
+                "<code>/check http://testphp.vulnweb.com/listproducts.php?cat=1</code>\n"
+                "или просто отправьте ссылку в чат."
+            ),
         )
         return
 
     # 1. SSRF-фильтрация (DNS-резолв и проверка приватных диапазонов)
     is_safe, error_reason, resolved_ip = await validate_url_safe(target_url)
     if not is_safe:
-        await message.answer(
-            f"🛡 <b>Защита от SSRF: Запрос отклонен</b>\n\n"
-            f"❌ <b>Причина:</b> {html.escape(error_reason)}\n"
-            f"🎯 <b>Цель:</b> <code>{html.escape(target_url)}</code>\n\n"
-            f"<i>Сканирование локальных, приватных адресов и облачных метаданных строго запрещено.</i>"
+        await update_screen(
+            event=message,
+            state=state,
+            text=(
+                f"🛡 <b>Защита от SSRF: Запрос отклонен</b>\n\n"
+                f"❌ <b>Причина:</b> {html.escape(error_reason)}\n"
+                f"🎯 <b>Цель:</b> <code>{html.escape(target_url)}</code>\n\n"
+                f"<i>Сканирование локальных, приватных адресов и облачных метаданных строго запрещено.</i>"
+            ),
         )
         return
 
@@ -165,15 +196,23 @@ async def cmd_check(message: Message, command: CommandObject | None = None) -> N
             raise ValueError("Invalid URL components")
         clean_origin = f"{parsed.scheme}://{parsed.netloc}"
     except Exception:
-        await message.answer("❌ <b>Некорректный формат адреса.</b> Укажите правильный URL.")
+        await update_screen(
+            event=message,
+            state=state,
+            text="❌ <b>Некорректный формат адреса.</b> Укажите правильный URL.",
+        )
         return
 
     zap = get_zap_service()
     is_alive = await zap.check_health()
     if not is_alive:
-        await message.answer(
-            f"❌ <b>Сканер OWASP ZAP недоступен.</b>\n"
-            f"Убедитесь, что демон ZAP запущен на <code>{settings.ZAP_PROXY}</code>."
+        await update_screen(
+            event=message,
+            state=state,
+            text=(
+                f"❌ <b>Сканер OWASP ZAP недоступен.</b>\n"
+                f"Убедитесь, что демон ZAP запущен на <code>{settings.ZAP_PROXY}</code>."
+            ),
         )
         return
 
@@ -186,9 +225,13 @@ async def cmd_check(message: Message, command: CommandObject | None = None) -> N
     }
 
     resolved_note = f" (IP: <code>{resolved_ip}</code>)" if resolved_ip else ""
-    await message.answer(
-        f"🎯 <b>Цель подтверждена:</b> <code>{html.escape(target_url)}</code>{resolved_note}\n\n"
-        f"Выберите тип и глубину аудита безопасности:",
+    await update_screen(
+        event=message,
+        state=state,
+        text=(
+            f"🎯 <b>Цель подтверждена:</b> <code>{html.escape(target_url)}</code>{resolved_note}\n\n"
+            f"Выберите тип и глубину аудита безопасности:"
+        ),
         reply_markup=get_scan_mode_keyboard(target_id=target_id),
     )
 
@@ -197,6 +240,7 @@ async def cmd_check(message: Message, command: CommandObject | None = None) -> N
 async def handle_scan_mode_selection(
     callback: CallbackQuery,
     callback_data: ZapScanModeCallback,
+    state: FSMContext,
 ) -> None:
     """
     Обработчик выбора режима сканирования:
@@ -210,9 +254,11 @@ async def handle_scan_mode_selection(
 
     if mode == "cancel":
         _pending_scans.pop(target_id, None)
-        if callback.message:
-            await callback.message.edit_text("❌ Сканирование отменено.")
-        await callback.answer("Отменено.")
+        await update_screen(
+            event=callback,
+            state=state,
+            text="❌ Сканирование отменено.",
+        )
         return
 
     scan_info = _pending_scans.pop(target_id, None)
@@ -243,12 +289,18 @@ async def handle_scan_mode_selection(
     }
     mode_name = mode_titles.get(mode, "Аудит ZAP")
 
-    status_msg = await callback.message.edit_text(
-        f"<b>{mode_name}</b>\n"
-        f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
-        f"⏳ Инициализация сканера и прогрев дерева узлов...",
+    status_msg = await update_screen(
+        event=callback,
+        state=state,
+        text=(
+            f"<b>{mode_name}</b>\n"
+            f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
+            f"⏳ Инициализация сканера и прогрев дерева узлов..."
+        ),
         reply_markup=get_scan_stop_keyboard(token=scan_token),
     )
+    if not status_msg:
+        status_msg = callback.message
 
     # Регистрируем активный скан
     _active_scans[scan_token] = {
@@ -272,6 +324,7 @@ async def handle_scan_mode_selection(
             status_msg=status_msg,
             stop_event=stop_event,
             callback=callback,
+            state=state,
         )
     )
 
@@ -285,6 +338,7 @@ async def _execute_scan_worker(
     status_msg: Message,
     stop_event: asyncio.Event,
     callback: CallbackQuery,
+    state: FSMContext | None = None,
 ) -> None:
     """Фоновый воркер выполнения сканирования с семафором и кнопкой Stop."""
     zap = get_zap_service()
@@ -314,15 +368,15 @@ async def _execute_scan_worker(
             if spider_id.isdigit():
                 _active_scans[scan_token]["spider_id"] = spider_id
                 # Сразу отображаем индикатор паука 0% для мгновенного отклика интерфейса
-                try:
-                    await status_msg.edit_text(
+                await safe_edit_message(
+                    message=status_msg,
+                    text=(
                         f"<b>{mode_name}</b>\n"
                         f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
-                        f"🕷 <b>Паук:</b> {render_progress_bar(0)}",
-                        reply_markup=get_scan_stop_keyboard(token=scan_token),
-                    )
-                except Exception:
-                    pass
+                        f"🕷 <b>Паук:</b> {render_progress_bar(0)}"
+                    ),
+                    reply_markup=get_scan_stop_keyboard(token=scan_token),
+                )
 
                 last_spider_percent = 0
                 max_spider_time = 12 if mode == "passive" else 180
@@ -337,15 +391,15 @@ async def _execute_scan_worker(
                     percent = await zap.get_spider_status(spider_id)
                     if percent != last_spider_percent:
                         last_spider_percent = percent
-                        try:
-                            await status_msg.edit_text(
+                        await safe_edit_message(
+                            message=status_msg,
+                            text=(
                                 f"<b>{mode_name}</b>\n"
                                 f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
-                                f"🕷 <b>Паук:</b> {render_progress_bar(percent)}",
-                                reply_markup=get_scan_stop_keyboard(token=scan_token),
-                            )
-                        except (TelegramRetryAfter, TelegramBadRequest):
-                            pass
+                                f"🕷 <b>Паук:</b> {render_progress_bar(percent)}"
+                            ),
+                            reply_markup=get_scan_stop_keyboard(token=scan_token),
+                        )
 
                     if percent >= 100:
                         break
@@ -355,32 +409,32 @@ async def _execute_scan_worker(
 
             # 4. В пассивном режиме пропускаем активный скан инъекций
             if mode == "passive":
-                try:
-                    await status_msg.edit_text(
+                await safe_edit_message(
+                    message=status_msg,
+                    text=(
                         f"<b>{mode_name}</b>\n"
                         f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
                         f"✔ <b>Паук:</b> 100%\n"
-                        f"🛡 <b>Пассивный анализ заголовков и кук...</b>",
-                        reply_markup=get_scan_stop_keyboard(token=scan_token),
-                    )
-                except Exception:
-                    pass
+                        f"🛡 <b>Пассивный анализ заголовков и кук...</b>"
+                    ),
+                    reply_markup=get_scan_stop_keyboard(token=scan_token),
+                )
                 await zap.wait_for_passive_scan(timeout=8)
 
             elif mode in ("fast", "full"):
                 if stop_event.is_set():
                     return
 
-                try:
-                    await status_msg.edit_text(
+                await safe_edit_message(
+                    message=status_msg,
+                    text=(
                         f"<b>{mode_name}</b>\n"
                         f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
                         f"✔ <b>Паук:</b> 100%\n"
-                        f"🔥 <b>Активное сканирование:</b> {render_progress_bar(0)}",
-                        reply_markup=get_scan_stop_keyboard(token=scan_token),
-                    )
-                except Exception:
-                    pass
+                        f"🔥 <b>Активное сканирование:</b> {render_progress_bar(0)}"
+                    ),
+                    reply_markup=get_scan_stop_keyboard(token=scan_token),
+                )
 
                 recurse = (mode == "full")
                 ascan_id = await zap.start_active_scan(
@@ -408,16 +462,16 @@ async def _execute_scan_worker(
                         percent = await zap.get_active_scan_status(ascan_id)
                         if percent != last_ascan_percent:
                             last_ascan_percent = percent
-                            try:
-                                await status_msg.edit_text(
+                            await safe_edit_message(
+                                message=status_msg,
+                                text=(
                                     f"<b>{mode_name}</b>\n"
                                     f"🎯 Цель: <code>{html.escape(target_url)}</code>\n\n"
                                     f"✔ <b>Паук:</b> 100%\n"
-                                    f"🔥 <b>Активное сканирование:</b> {render_progress_bar(percent)}",
-                                    reply_markup=get_scan_stop_keyboard(token=scan_token),
-                                )
-                            except (TelegramRetryAfter, TelegramBadRequest):
-                                pass
+                                    f"🔥 <b>Активное сканирование:</b> {render_progress_bar(percent)}"
+                                ),
+                                reply_markup=get_scan_stop_keyboard(token=scan_token),
+                            )
 
                         if percent >= 100:
                             break
@@ -471,35 +525,30 @@ async def _execute_scan_worker(
                 f"📄 <i>Полный HTML-отчет ZAP прикреплен ниже.</i>"
             )
 
-            try:
-                await status_msg.edit_text(
-                    text=summary_text,
-                    reply_markup=get_ai_audit_keyboard(cache_id=cache_id),
-                )
-            except Exception:
-                await callback.message.answer(
-                    text=summary_text,
-                    reply_markup=get_ai_audit_keyboard(cache_id=cache_id),
-                )
+            await safe_edit_message(
+                message=status_msg,
+                text=summary_text,
+                reply_markup=get_ai_audit_keyboard(cache_id=cache_id),
+            )
 
-            # Отправляем HTML документ
+            # Отправляем HTML документ и регистрируем для последующей очистки
             parsed = urlparse(target_url)
             clean_name = re.sub(r"[^a-zA-Z0-9_-]", "_", parsed.netloc)
             report_filename = f"zap_report_{clean_name}.html"
 
-            await callback.message.answer_document(
+            doc_msg = await callback.message.answer_document(
                 document=BufferedInputFile(html_report, filename=report_filename),
                 caption=f"📋 Детальный HTML-отчет OWASP ZAP для <code>{html.escape(clean_origin)}</code>",
             )
+            if state and doc_msg:
+                await track_extra_message(state=state, message_id=doc_msg.message_id)
 
         except Exception as exc:
             logger.exception("Ошибка при выполнении ZAP аудита: %s", exc)
-            try:
-                await status_msg.edit_text(
-                    f"❌ <b>Произошла ошибка во время сканирования:</b>\n<code>{html.escape(str(exc))}</code>"
-                )
-            except Exception:
-                pass
+            await safe_edit_message(
+                message=status_msg,
+                text=f"❌ <b>Произошла ошибка во время сканирования:</b>\n<code>{html.escape(str(exc))}</code>",
+            )
         finally:
             _active_scans.pop(scan_token, None)
 
@@ -508,6 +557,7 @@ async def _execute_scan_worker(
 async def handle_scan_stop_callback(
     callback: CallbackQuery,
     callback_data: ZapScanStopCallback,
+    state: FSMContext,
 ) -> None:
     """
     Экстренная остановка активного сканирования по кнопке 'Стоп'.
@@ -550,17 +600,16 @@ async def handle_scan_stop_callback(
         "user_id": callback.from_user.id,
     }
 
-    status_msg = scan_ctx.get("status_msg")
-    if status_msg:
-        try:
-            await status_msg.edit_text(
-                f"⛔ <b>Сканирование остановлено.</b>\n\n"
-                f"🎯 <b>Цель:</b> <code>{html.escape(target_url)}</code>\n\n"
-                f"Выберите тип и глубину аудита безопасности:",
-                reply_markup=get_scan_mode_keyboard(target_id=target_id),
-            )
-        except Exception:
-            pass
+    await update_screen(
+        event=callback,
+        state=state,
+        text=(
+            f"⛔ <b>Сканирование остановлено.</b>\n\n"
+            f"🎯 <b>Цель:</b> <code>{html.escape(target_url)}</code>\n\n"
+            f"Выберите тип и глубину аудита безопасности:"
+        ),
+        reply_markup=get_scan_mode_keyboard(target_id=target_id),
+    )
 
     _active_scans.pop(token, None)
 
@@ -574,6 +623,7 @@ async def handle_scan_stop_callback(
 async def handle_ai_audit_callback(
     callback: CallbackQuery,
     callback_data: ZapAiAuditCallback,
+    state: FSMContext,
 ) -> None:
     """
     Обработка нажатия инлайн-кнопки «💡 Получить аудит и код исправлений от ИИ».
@@ -618,8 +668,9 @@ async def handle_ai_audit_callback(
 
     for chunk in chunks:
         clean_chunk = format_telegram_html(chunk)
+        sent_msg = None
         try:
-            await callback.bot.send_message(
+            sent_msg = await callback.bot.send_message(
                 chat_id=chat_id,
                 text=clean_chunk,
                 parse_mode="HTML",
@@ -628,9 +679,11 @@ async def handle_ai_audit_callback(
         except Exception as exc:
             logger.warning("Сбой HTML-разметки сообщения Gemini, fallback на plain-text: %s", exc)
             plain_text = re.sub(r"<[^>]+>", "", clean_chunk)
-            await callback.bot.send_message(
+            sent_msg = await callback.bot.send_message(
                 chat_id=chat_id,
                 text=plain_text[:4000],
                 disable_web_page_preview=True,
             )
+        if sent_msg:
+            await track_extra_message(state=state, message_id=sent_msg.message_id)
         await asyncio.sleep(0.3)
