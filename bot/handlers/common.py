@@ -4,6 +4,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from bot.config.config import settings
 from bot.keyboards.inline import (
     MenuActionCallback,
     get_welcome_inline_keyboard,
@@ -57,9 +58,10 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         "<i>Отправьте ссылку на сайт или GitHub-репозиторий для начала аудита:</i>"
     )
 
+    webapp_url = settings.WEBAPP_URL if settings else None
     await message.answer(
         text=welcome_text,
-        reply_markup=get_main_menu_keyboard(),
+        reply_markup=get_welcome_inline_keyboard(webapp_url=webapp_url),
         parse_mode="HTML",
     )
     await state.update_data(last_bot_msg_id=None, extra_msg_ids=[])

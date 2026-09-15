@@ -1,5 +1,5 @@
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
@@ -12,18 +12,24 @@ class MenuActionCallback(CallbackData, prefix="menu"):
     action: str
 
 
-def get_welcome_inline_keyboard() -> InlineKeyboardMarkup:
+def get_welcome_inline_keyboard(webapp_url: str | None = None) -> InlineKeyboardMarkup:
     """
-    Создает Inline-клавиатуру для стартового сообщения.
+    Создает Inline-клавиатуру для стартового сообщения с кнопкой Mini App.
     """
     builder = InlineKeyboardBuilder()
+
+    if webapp_url:
+        builder.button(
+            text="🛡️ Открыть Mini App (SOC)",
+            web_app=WebAppInfo(url=webapp_url),
+        )
 
     builder.button(
         text="⚡ Возможности шаблона",
         callback_data=MenuActionCallback(action="features"),
     )
     builder.button(
-        text="📊 Статистика БД",
+        text="📊 Статус сканера",
         callback_data=MenuActionCallback(action="stats"),
     )
     builder.button(
@@ -31,8 +37,10 @@ def get_welcome_inline_keyboard() -> InlineKeyboardMarkup:
         callback_data=MenuActionCallback(action="close"),
     )
 
-    # Расположение: 2 кнопки в первой строке, 1 кнопка во второй
-    builder.adjust(2, 1)
+    if webapp_url:
+        builder.adjust(1, 2, 1)
+    else:
+        builder.adjust(2, 1)
     return builder.as_markup()
 
 

@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     ZAP_PROXY: str = "http://127.0.0.1:8090"
     ZAP_API_KEY: SecretStr | None = None
 
+    # Конфигурация Telegram Mini App (FastAPI)
+    WEBAPP_HOST: str = "0.0.0.0"
+    WEBAPP_PORT: int = 8000
+    WEBAPP_URL: str = "http://127.0.0.1:8000"
+
     @property
     def zap_endpoint(self) -> str:
         return self.ZAP_PROXY or self.ZAP_URL

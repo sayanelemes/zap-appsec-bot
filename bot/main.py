@@ -9,8 +9,11 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import MenuButtonWebApp, WebAppInfo
 from pydantic import ValidationError
+import uvicorn
 
+from bot.api.app import app as fastapi_app
 from bot.config import settings
 from bot.config.config import get_settings
 from bot.handlers import get_root_router
@@ -128,15 +131,47 @@ async def main() -> None:
                 text=f"🚀 <b>{cfg.BOT_NAME} (@{bot_info.username}) успешно запущен!</b>",
             )
 
-        logger.info("Запуск Long Polling...")
+        # Настройка кнопки меню чата Telegram (TMA)
+        try:
+            await bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text="SOC Scanner",
+                    web_app=WebAppInfo(url=cfg.WEBAPP_URL),
+                )
+            )
+            logger.info("Кнопка меню чата Telegram настроена на TMA: %s", cfg.WEBAPP_URL)
+        except Exception as e:
+            logger.warning("Не удалось установить кнопку меню чата TMA: %s", e)
+
+        # Конфигурация веб-сервера FastAPI (Uvicorn)
+        uvicorn_config = uvicorn.Config(
+            app=fastapi_app,
+            host=cfg.WEBAPP_HOST,
+            port=cfg.WEBAPP_PORT,
+            log_level="warning",
+        )
+        server = uvicorn.Server(uvicorn_config)
+
+        logger.info(
+            "Запуск FastAPI сервера (http://%s:%s) и Telegram Bot Polling...",
+            cfg.WEBAPP_HOST,
+            cfg.WEBAPP_PORT,
+        )
         # Сбрасываем накопившиеся за время простоя апдейты
         await bot.delete_webhook(drop_pending_updates=True)
-        await dp.start_polling(bot)
+
+        # Запуск параллельно в едином цикле событий через asyncio.gather
+        await asyncio.gather(
+            server.serve(),
+            dp.start_polling(bot),
+        )
 
     except (KeyboardInterrupt, SystemExit):
         logger.info("Получен сигнал завершения работы...")
     finally:
         logger.info("Выполняется процедура Graceful Shutdown...")
+        if "server" in locals():
+            server.should_exit = True
 
         # Оповещение администраторов об остановке
         if cfg.ADMIN_IDS:

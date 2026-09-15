@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>ZAP_DAST // SOC Scanner</title>
+  <!-- Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            soc: {
+              bg: '#0a0c10',
+              card: '#161b22',
+              border: '#21262d',
+              accent: '#238636',
+              cyan: '#00e5ff',
+              red: '#f85149',
+              orange: '#db6d28',
+              yellow: '#d29922',
+              blue: '#58a6ff',
+              text: '#c9d1d9',
+              dim: '#8b949e',
+            }
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    body {
+      background-color: #0a0c10;
+      color: #c9d1d9;
+      font-family: 'JetBrains Mono', monospace;
+      -webkit-font-smoothing: antialiased;
+    }
+    /* Custom scanline / cyber grid subtle effect */
+    .soc-grid {
+      background-image: linear-gradient(to right, #161b22 1px, transparent 1px),
+                        linear-gradient(to bottom, #161b22 1px, transparent 1px);
+      background-size: 32px 32px;
+    }
+    /* Custom scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0a0c10;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #21262d;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #30363d;
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-[#0a0c10] text-[#c9d1d9] flex flex-col items-center p-3 pb-16">
+
+  <div class="w-full max-w-2xl flex flex-col gap-4">
+
+    <!-- TOP BAR -->
+    <header class="flex items-center justify-between border border-[#21262d] bg-[#161b22] px-4 py-3 rounded-lg shadow-lg">
+      <div class="flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]"></span>
+        <span class="text-sm font-bold tracking-wider text-emerald-400">ZAP_DAST // CORE</span>
+      </div>
+      <div id="daemon-badge" class="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded bg-[#0d1117] border border-[#30363d] text-gray-300">
+        <span id="daemon-indicator" class="w-2 h-2 rounded-full bg-gray-500"></span>
+        <span id="daemon-text">CHECKING...</span>
+      </div>
+    </header>
+
+    <!-- TARGET INPUT & MODE SELECTOR -->
+    <section class="border border-[#21262d] bg-[#161b22] p-4 rounded-lg shadow-lg flex flex-col gap-4">
+      <div class="flex flex-col gap-1.5">
+        <label for="target-input" class="text-xs uppercase tracking-wider text-[#8b949e] font-semibold flex justify-between">
+          <span>Цель аудита (Target URL / GitHub)</span>
+          <span class="text-[10px] text-gray-500">DAST & SAST</span>
+        </label>
+        <div class="relative">
+          <input
+            id="target-input"
+            type="text"
+            placeholder="http://site.com или https://github.com/org/repo"
+            class="w-full bg-[#0d1117] border border-[#30363d] rounded px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-emerald-500 transition-colors"
+          />
+        </div>
+      </div>
+
+      <!-- MODE SELECTOR -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-xs uppercase tracking-wider text-[#8b949e] font-semibold">Глубина анализа:</span>
+        <div class="grid grid-cols-3 gap-2 text-xs">
+          <button
+            type="button"
+            onclick="selectMode('passive')"
+            id="mode-passive"
+            class="mode-btn border border-[#30363d] bg-[#0d1117] hover:border-emerald-500/50 py-2 px-1 rounded text-center transition-all text-gray-300 font-medium"
+          >
+            🛡️ PASSIVE<br><span class="text-[10px] text-gray-500">5-10 сек</span>
+          </button>
+          <button
+            type="button"
+            onclick="selectMode('fast')"
+            id="mode-fast"
+            class="mode-btn border border-emerald-500 bg-emerald-950/30 text-emerald-400 py-2 px-1 rounded text-center transition-all font-semibold"
+          >
+            ⚡ FAST<br><span class="text-[10px] text-emerald-500/80">90 сек</span>
+          </button>
+          <button
+            type="button"
+            onclick="selectMode('full')"
+            id="mode-full"
+            class="mode-btn border border-[#30363d] bg-[#0d1117] hover:border-emerald-500/50 py-2 px-1 rounded text-center transition-all text-gray-300 font-medium"
+          >
+            🔍 FULL<br><span class="text-[10px] text-gray-500">Глубокий</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- ACTION BUTTONS -->
+      <div class="grid grid-cols-2 gap-3 pt-2">
+        <button
+          id="btn-start"
+          onclick="handleStartScan()"
+          class="bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white font-semibold py-2.5 px-4 rounded text-sm flex items-center justify-center gap-2 shadow-[0_0_12px_rgba(16,185,129,0.2)] transition-all cursor-pointer"
+        >
+          <span>▶ НАЧАТЬ</span>
+        </button>
+        <button
+          id="btn-stop"
+          onclick="handleStopScan()"
+          disabled
+          class="bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/80 text-rose-300 disabled:border-gray-800 disabled:bg-gray-900 disabled:text-gray-600 disabled:cursor-not-allowed font-semibold py-2.5 px-4 rounded text-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
+        >
+          <span>🛑 СТОП</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- LIVE CONSOLE & PROGRESS -->
+    <section class="border border-[#21262d] bg-[#161b22] p-4 rounded-lg shadow-lg flex flex-col gap-3">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="text-xs uppercase tracking-wider text-[#8b949e] font-semibold">&gt;_ SOC_TERMINAL</span>
+          <span id="scan-state-pill" class="text-[10px] px-2 py-0.5 rounded bg-gray-800 text-gray-400 font-bold uppercase">IDLE</span>
+        </div>
+        <span id="progress-text" class="text-xs font-bold text-emerald-400">0%</span>
+      </div>
+
+      <!-- PROGRESS BAR -->
+      <div class="w-full bg-[#0d1117] h-2 rounded-full overflow-hidden border border-[#21262d]">
+        <div id="progress-bar" class="bg-gradient-to-r from-emerald-500 to-cyan-400 h-full transition-all duration-300 w-0"></div>
+      </div>
+
+      <!-- LOG TERMINAL -->
+      <div
+        id="terminal-logs"
+        class="w-full h-44 bg-[#0a0c10] border border-[#21262d] rounded p-2.5 text-xs text-gray-300 font-mono overflow-y-auto flex flex-col gap-1 select-text"
+      >
+        <div class="text-gray-600 text-[11px]">[SYSTEM] Сканер инициализирован и готов к работе. Укажите цель.</div>
+      </div>
+    </section>
+
+    <!-- FINDINGS / VULNERABILITIES LIST -->
+    <section class="border border-[#21262d] bg-[#161b22] p-4 rounded-lg shadow-lg flex flex-col gap-3">
+      <div class="flex items-center justify-between border-b border-[#21262d] pb-2">
+        <span class="text-xs uppercase tracking-wider text-[#8b949e] font-semibold">ОБНАРУЖЕННЫЕ УЯЗВИМОСТИ</span>
+        <span id="findings-count" class="text-xs font-bold px-2 py-0.5 rounded bg-[#0d1117] border border-[#30363d] text-gray-300">0</span>
+      </div>
+
+      <div id="findings-container" class="flex flex-col gap-2.5">
+        <div class="text-center py-6 text-gray-600 text-xs">
+          Запустите аудит для отображения отчета по уязвимостям.
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <script>
+    // Инициализация Telegram WebApp
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+      if (tg.setHeaderColor) tg.setHeaderColor('#0a0c10');
+      if (tg.setBackgroundColor) tg.setBackgroundColor('#0a0c10');
+    }
+
+    // Тактильный отклик (Haptic Feedback)
+    function haptic(type = 'impact', style = 'medium') {
+      if (!tg?.HapticFeedback) return;
+      try {
+        if (type === 'impact') {
+          tg.HapticFeedback.impactOccurred(style);
+        } else if (type === 'notification') {
+          tg.HapticFeedback.notificationOccurred(style);
+        }
+      } catch (e) {
+        console.debug('Haptic feedback error:', e);
+      }
+    }
+
+    // Состояние приложения
+    let currentMode = 'fast';
+    let isRunning = false;
+    let pollTimer = null;
+    let lastLogCount = 0;
+
+    // Выбор режима сканирования
+    function selectMode(mode) {
+      currentMode = mode;
+      haptic('impact', 'light');
+
+      const modes = ['passive', 'fast', 'full'];
+      modes.forEach(m => {
+        const btn = document.getElementById(`mode-${m}`);
+        if (m === mode) {
+          btn.className = 'mode-btn border border-emerald-500 bg-emerald-950/30 text-emerald-400 py-2 px-1 rounded text-center transition-all font-semibold';
+          btn.querySelector('span').className = 'text-[10px] text-emerald-500/80';
+        } else {
+          btn.className = 'mode-btn border border-[#30363d] bg-[#0d1117] hover:border-emerald-500/50 py-2 px-1 rounded text-center transition-all text-gray-300 font-medium';
+          btn.querySelector('span').className = 'text-[10px] text-gray-500';
+        }
+      });
+    }
+
+    // Заголовки авторизации Telegram WebApp
+    function getAuthHeaders() {
+      const headers = { 'Content-Type': 'application/json' };
+      if (tg?.initData) {
+        headers['X-Telegram-Init-Data'] = tg.initData;
+      }
+      return headers;
+    }
+
+    // Проверка статуса ZAP демона
+    async function checkDaemonHealth() {
+      try {
+        const res = await fetch('/api/health');
+        if (res.ok) {
+          const data = await res.json();
+          const badge = document.getElementById('daemon-badge');
+          const indicator = document.getElementById('daemon-indicator');
+          const text = document.getElementById('daemon-text');
+
+          if (data.zap_daemon_connected) {
+            indicator.className = 'w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]';
+            text.textContent = 'DAEMON: 8080';
+            text.className = 'text-emerald-400 font-medium';
+          } else {
+            indicator.className = 'w-2 h-2 rounded-full bg-amber-400';
+            text.textContent = 'DAEMON: OFFLINE';
+            text.className = 'text-amber-400 font-medium';
+          }
+        }
+      } catch (err) {
+        console.warn('Health check failed:', err);
+      }
+    }
+
+    // Запуск сканирования
+    async function handleStartScan() {
+      const input = document.getElementById('target-input');
+      const target = input.value.trim();
+
+      if (!target) {
+        haptic('notification', 'error');
+        alert('Пожалуйста, укажите целевой URL или ссылку на GitHub репозиторий!');
+        input.focus();
+        return;
+      }
+
+      haptic('impact', 'heavy');
+
+      const btnStart = document.getElementById('btn-start');
+      const btnStop = document.getElementById('btn-stop');
+      btnStart.disabled = true;
+
+      try {
+        const res = await fetch('/api/scan/start', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ target: target, mode: currentMode }),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({ detail: 'Ошибка сервера' }));
+          haptic('notification', 'error');
+          alert('Ошибка запуска: ' + (errData.detail || res.statusText));
+          btnStart.disabled = false;
+          return;
+        }
+
+        const data = await res.json();
+        btnStop.disabled = false;
+        isRunning = true;
+        renderStatus(data);
+      } catch (e) {
+        haptic('notification', 'error');
+        alert('Не удалось подключиться к серверу: ' + e.message);
+        btnStart.disabled = false;
+      }
+    }
+
+    // Остановка сканирования
+    async function handleStopScan() {
+      haptic('notification', 'warning');
+      const btnStop = document.getElementById('btn-stop');
+      btnStop.disabled = true;
+
+      try {
+        const res = await fetch('/api/scan/stop', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          renderStatus(data);
+        }
+      } catch (e) {
+        console.error('Stop scan error:', e);
+      }
+    }
+
+    // Опрос статуса сканирования
+    async function pollStatus() {
+      try {
+        const res = await fetch('/api/scan/status', {
+          headers: getAuthHeaders(),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          renderStatus(data);
+        }
+      } catch (err) {
+        console.debug('Poll status error:', err);
+      }
+    }
+
+    // Отображение статуса
+    function renderStatus(data) {
+      const state = data.state;
+      const progress = Math.max(0, Math.min(100, data.progress || 0));
+      const logs = data.logs || [];
+      const findings = data.findings || [];
+
+      isRunning = (state === 'running');
+
+      // Кнопки управления
+      document.getElementById('btn-start').disabled = isRunning;
+      document.getElementById('btn-stop').disabled = !isRunning;
+
+      // Прогресс бар
+      document.getElementById('progress-bar').style.width = `${progress}%`;
+      document.getElementById('progress-text').textContent = `${progress}%`;
+
+      // Статус бейдж
+      const statePill = document.getElementById('scan-state-pill');
+      statePill.textContent = state.toUpperCase();
+      if (state === 'running') {
+        statePill.className = 'text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-bold uppercase border border-emerald-800 animate-pulse';
+      } else if (state === 'finished') {
+        statePill.className = 'text-[10px] px-2 py-0.5 rounded bg-blue-950 text-blue-400 font-bold uppercase border border-blue-800';
+      } else if (state === 'stopped') {
+        statePill.className = 'text-[10px] px-2 py-0.5 rounded bg-rose-950 text-rose-400 font-bold uppercase border border-rose-800';
+      } else {
+        statePill.className = 'text-[10px] px-2 py-0.5 rounded bg-gray-800 text-gray-400 font-bold uppercase';
+      }
+
+      // Логи терминала
+      const terminal = document.getElementById('terminal-logs');
+      if (logs.length !== lastLogCount) {
+        lastLogCount = logs.length;
+        if (logs.length === 0) {
+          terminal.innerHTML = '<div class="text-gray-600 text-[11px]">[SYSTEM] Ожидание запуска задачи...</div>';
+        } else {
+          terminal.innerHTML = logs.map(l => {
+            let color = 'text-gray-300';
+            if (l.includes('❌') || l.includes('CRITICAL') || l.includes('HIGH')) color = 'text-rose-400';
+            else if (l.includes('🛑') || l.includes('WARN')) color = 'text-amber-400';
+            else if (l.includes('✅') || l.includes('Spider') || l.includes('Active')) color = 'text-emerald-400';
+            return `<div class="${color}">${escapeHtml(l)}</div>`;
+          }).join('');
+          terminal.scrollTop = terminal.scrollHeight;
+        }
+      }
+
+      // Отображение списка уязвимостей
+      renderFindings(findings);
+    }
+
+    // Отображение карточек уязвимостей с аккордеоном
+    function renderFindings(findings) {
+      const container = document.getElementById('findings-container');
+      const countPill = document.getElementById('findings-count');
+      countPill.textContent = findings.length;
+
+      if (findings.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-6 text-gray-600 text-xs">
+            ${isRunning ? '⏳ Сканирование в процессе, анализ уязвимостей...' : 'Уязвимостей не обнаружено.'}
+          </div>
+        `;
+        return;
+      }
+
+      const severityConfig = {
+        CRITICAL: { border: 'border-l-rose-500', bg: 'bg-rose-950/30', badge: 'bg-rose-900/60 text-rose-300 border-rose-700' },
+        HIGH: { border: 'border-l-orange-500', bg: 'bg-orange-950/30', badge: 'bg-orange-900/60 text-orange-300 border-orange-700' },
+        MEDIUM: { border: 'border-l-amber-500', bg: 'bg-amber-950/30', badge: 'bg-amber-900/60 text-amber-300 border-amber-700' },
+        LOW: { border: 'border-l-blue-500', bg: 'bg-blue-950/30', badge: 'bg-blue-900/60 text-blue-300 border-blue-700' },
+      };
+
+      container.innerHTML = findings.map((f, idx) => {
+        const sev = f.severity || 'LOW';
+        const cfg = severityConfig[sev] || severityConfig.LOW;
+        const cvssText = f.cvss ? `CVSS: ${f.cvss}` : sev;
+
+        return `
+          <div class="border border-[#21262d] border-l-4 ${cfg.border} bg-[#0d1117] rounded p-3 flex flex-col gap-2 transition-all">
+            <div class="flex items-start justify-between cursor-pointer" onclick="toggleAccordion(${idx})">
+              <div class="flex flex-col gap-1 pr-2">
+                <span class="text-xs font-semibold text-white hover:text-emerald-400 transition-colors">${escapeHtml(f.title)}</span>
+                ${f.param ? `<span class="text-[11px] text-gray-400 font-mono">Параметр: <code class="text-emerald-400">${escapeHtml(f.param)}</code></span>` : ''}
+              </div>
+              <div class="flex items-center gap-2 flex-shrink-0">
+                <span class="text-[10px] font-bold px-2 py-0.5 rounded border ${cfg.badge}">
+                  ${cvssText}
+                </span>
+                <span id="chevron-${idx}" class="text-gray-500 text-xs transform transition-transform">▼</span>
+              </div>
+            </div>
+
+            <!-- Раскрывающийся аккордеон с деталями -->
+            <div id="details-${idx}" class="hidden flex flex-col gap-2 pt-2 border-t border-[#21262d] text-xs text-gray-300">
+              ${f.description ? `<div><span class="text-gray-500 uppercase text-[10px] font-bold block">Описание:</span><p class="whitespace-pre-wrap mt-0.5 text-gray-300">${escapeHtml(f.description)}</p></div>` : ''}
+              <div class="flex flex-wrap gap-3 pt-1 text-[11px]">
+                ${f.cwe ? `<span class="bg-[#161b22] px-2 py-0.5 rounded border border-[#30363d] text-gray-400 font-mono">CWE: <span class="text-white">${escapeHtml(f.cwe)}</span></span>` : ''}
+                ${f.cve ? `<span class="bg-[#161b22] px-2 py-0.5 rounded border border-[#30363d] text-gray-400 font-mono">CVE: <span class="text-white">${escapeHtml(f.cve)}</span></span>` : ''}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Переключение аккордеона карточки
+    function toggleAccordion(idx) {
+      haptic('impact', 'light');
+      const details = document.getElementById(`details-${idx}`);
+      const chevron = document.getElementById(`chevron-${idx}`);
+      if (details.classList.contains('hidden')) {
+        details.classList.remove('hidden');
+        chevron.style.transform = 'rotate(180deg)';
+      } else {
+        details.classList.add('hidden');
+        chevron.style.transform = 'rotate(0deg)';
+      }
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    // Инициализация при загрузке страницы
+    window.addEventListener('DOMContentLoaded', () => {
+      checkDaemonHealth();
+      pollStatus();
+
+      // Опрос здоровья ZAP каждые 10 секунд
+      setInterval(checkDaemonHealth, 10000);
+
+      // Опрос статуса сканера каждые 2 секунды
+      pollTimer = setInterval(pollStatus, 2000);
+    });
+  </script>
+</body>
+</html>
