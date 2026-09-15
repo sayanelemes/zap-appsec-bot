@@ -57,12 +57,12 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         "<i>Отправьте ссылку на сайт или GitHub-репозиторий для начала аудита:</i>"
     )
 
-    await update_screen(
-        event=message,
-        state=state,
+    await message.answer(
         text=welcome_text,
         reply_markup=get_main_menu_keyboard(),
+        parse_mode="HTML",
     )
+    await state.update_data(last_bot_msg_id=None, extra_msg_ids=[])
 
 
 @common_router.message(F.text == "🛡 Проверить сайт")

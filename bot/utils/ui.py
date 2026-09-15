@@ -18,20 +18,21 @@ async def update_screen(
     state: FSMContext,
     text: str,
     reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | None = None,
-    parse_mode: str | None = None,
+    parse_mode: str = "HTML",
     disable_web_page_preview: bool = True,
 ) -> Message | None:
     """
-    Динамическое обновление экрана (Clean UI):
+    Бесшовное динамическое обновление экрана:
     1. Если передан CallbackQuery:
        - Снимает индикатор загрузки кнопки через await event.answer().
        - Редактирует текущее сообщение "на месте" (edit_text).
        - Обновляет last_bot_msg_id в FSM-хранилище.
     2. Если передан Message:
-       - Удаляет входящее сообщение пользователя через event.delete().
-       - Удаляет предыдущее сообщение экрана бота (last_bot_msg_id) и связанные доп. сообщения.
-       - Отправляет новое сообщение экрана бота и сохраняет его ID в state.update_data(last_bot_msg_id=...).
-    3. Все операции Telegram API защищены от исключений TelegramBadRequest.
+       - НЕ удаляет входящее сообщение пользователя и постоянное приветствие /start.
+       - Проверяет наличие last_bot_msg_id в FSM:
+         * Если существует — плавно редактирует его на месте через bot.edit_message_text без дерганий.
+         * Если отсутствует или редактирование невозможно — отправляет новое сообщение и сохраняет его ID.
+    3. Принудительно использует parse_mode="HTML" для правильного рендеринга стилей, шрифтов и тегов.
     """
     if isinstance(event, CallbackQuery):
         # 1. Снимаем индикатор загрузки с кнопки
@@ -76,39 +77,31 @@ async def update_screen(
                 return None
 
     elif isinstance(event, Message):
-        # 1. Немедленно удаляем входящее текстовое сообщение пользователя
-        try:
-            await event.delete()
-        except (TelegramBadRequest, Exception) as exc:
-            logger.debug("Не удалось удалить входящее сообщение пользователя: %s", exc)
-
-        # 2. Проверяем наличие last_bot_msg_id и удаляем предыдущие системные сообщения
         data = await state.get_data()
         last_bot_msg_id = data.get("last_bot_msg_id")
 
+        # В edit_message_text поддерживается только InlineKeyboardMarkup или None
+        inline_markup = reply_markup if isinstance(reply_markup, InlineKeyboardMarkup) else None
+
+        # 1. Если активный экран уже существует — редактируем его на месте (без дерганий и удалений)
         if last_bot_msg_id:
             try:
-                await event.bot.delete_message(
+                edited_msg = await event.bot.edit_message_text(
                     chat_id=event.chat.id,
                     message_id=last_bot_msg_id,
+                    text=text,
+                    reply_markup=inline_markup,
+                    parse_mode=parse_mode,
+                    disable_web_page_preview=disable_web_page_preview,
                 )
-            except (TelegramBadRequest, Exception) as exc:
-                logger.debug("Не удалось удалить предыдущее сообщение экрана %s: %s", last_bot_msg_id, exc)
+                return edited_msg
+            except TelegramBadRequest as exc:
+                err_msg = str(exc).lower()
+                if "message is not modified" in err_msg:
+                    return None
+                logger.debug("Не удалось отредактировать сообщение %s на месте: %s", last_bot_msg_id, exc)
 
-        # Дополнительная очистка вспомогательных сообщений (документы отчетов, чанки)
-        extra_msg_ids = data.get("extra_msg_ids", [])
-        if extra_msg_ids:
-            for extra_id in extra_msg_ids:
-                try:
-                    await event.bot.delete_message(
-                        chat_id=event.chat.id,
-                        message_id=extra_id,
-                    )
-                except Exception:
-                    pass
-            await state.update_data(extra_msg_ids=[])
-
-        # 3. Отправляем новое сообщение экрана и сохраняем его ID в FSM
+        # 2. Если экрана еще нет или редактирование не удалось — отправляем новое сообщение
         try:
             new_msg = await event.answer(
                 text=text,
@@ -119,7 +112,7 @@ async def update_screen(
             await state.update_data(last_bot_msg_id=new_msg.message_id)
             return new_msg
         except TelegramBadRequest as exc:
-            logger.error("Сбой при отправке нового экрана: %s", exc)
+            logger.error("Сбой при отправке экрана: %s", exc)
             return None
 
     return None
@@ -129,12 +122,13 @@ async def safe_edit_message(
     message: Message,
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
-    parse_mode: str | None = None,
+    parse_mode: str = "HTML",
     disable_web_page_preview: bool = True,
 ) -> bool:
     """
     Безопасное редактирование сообщения на месте для воркеров и таймеров прогресса.
-    Игнорирует 'message is not modified' и перехватывает TelegramBadRequest / TelegramRetryAfter.
+    Принудительно использует parse_mode="HTML", игнорирует 'message is not modified'
+    и перехватывает TelegramBadRequest / TelegramRetryAfter.
     """
     try:
         await message.edit_text(
@@ -160,7 +154,7 @@ async def safe_edit_message(
 async def track_extra_message(state: FSMContext, message_id: int) -> None:
     """
     Регистрирует ID дополнительного сообщения (например, файл отчета),
-    чтобы при следующем обновлении экрана через update_screen оно было удалено.
+    чтобы при необходимости управлять историей.
     """
     data = await state.get_data()
     extra_ids = list(data.get("extra_msg_ids", []))
