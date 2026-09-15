@@ -7,7 +7,7 @@ import uuid
 from typing import Any
 from urllib.parse import urlparse
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
@@ -89,6 +89,7 @@ def is_admin(user_id: int) -> bool:
 
 
 @zap_router.message(Command("zap_status"))
+@zap_router.message(F.text == "🔍 Статус ZAP")
 async def cmd_zap_status(message: Message) -> None:
     """Проверка статуса подключения к OWASP ZAP."""
     if not message.from_user or not is_admin(message.from_user.id):
@@ -97,10 +98,11 @@ async def cmd_zap_status(message: Message) -> None:
 
     zap = get_zap_service()
     is_alive = await zap.check_health()
+    endpoint = settings.zap_endpoint if settings else "http://zap:8080"
     if is_alive:
-        await message.answer(f"✅ <b>OWASP ZAP готов к работе!</b>\nПрокси: <code>{settings.ZAP_PROXY}</code>")
+        await message.answer(f"✅ <b>OWASP ZAP готов к работе!</b>\nАдрес: <code>{endpoint}</code>")
     else:
-        await message.answer(f"❌ <b>OWASP ZAP недоступен.</b>\nПроверьте, запущен ли демон на <code>{settings.ZAP_PROXY}</code>.")
+        await message.answer(f"❌ <b>OWASP ZAP недоступен.</b>\nПроверьте, запущен ли демон на <code>{endpoint}</code>.")
 
 
 @zap_router.message(Command("check"))

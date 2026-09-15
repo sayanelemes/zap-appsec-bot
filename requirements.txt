@@ -8,9 +8,6 @@ google-genai>=1.0.0
 pydantic-settings>=2.6.0,<3.0.0
 
 
-# Optional Redis storage for FSM
-redis>=5.2.0
-
 # OWASP ZAP API & HTTP Client
 python-owasp-zap-v2.4>=0.1.0
 requests>=2.31.0

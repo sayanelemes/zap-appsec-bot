@@ -25,9 +25,6 @@ class Settings(BaseSettings):
     # Задержка между запросами для антиспам-мидлваря (в секундах)
     THROTTLE_RATE: float = 0.5
 
-    # Опциональный URL для Redis FSM / кэша
-    REDIS_URL: str | None = None
-
     # Конфигурация Google GenAI (Gemini)
     GEMINI_API_KEY: SecretStr | None = None
     GEMINI_MODEL: str = "gemini-3.6-flash"

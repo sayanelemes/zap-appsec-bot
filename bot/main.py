@@ -90,21 +90,9 @@ async def main() -> None:
     setup_logging(cfg.LOG_LEVEL)
     logger.info("Инициализация сервисов %s...", cfg.BOT_NAME)
 
-    # 3. Настройка FSM хранилища (Redis или MemoryStorage)
-    if cfg.REDIS_URL:
-        try:
-            from aiogram.fsm.storage.redis import RedisStorage
-
-            storage = RedisStorage.from_url(cfg.REDIS_URL)
-            logger.info("Подключено Redis-хранилище для FSM: %s", cfg.REDIS_URL)
-        except ImportError:
-            logger.warning(
-                "Пакет redis не установлен или недоступен. Используется MemoryStorage."
-            )
-            storage = MemoryStorage()
-    else:
-        storage = MemoryStorage()
-        logger.info("Используется хранилище FSM по умолчанию: MemoryStorage")
+    # 3. Настройка FSM хранилища (In-Memory)
+    storage = MemoryStorage()
+    logger.info("Используется хранилище FSM: MemoryStorage")
 
     # 4. Инициализация Bot и Dispatcher
     bot = Bot(

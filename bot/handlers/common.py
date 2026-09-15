@@ -1,22 +1,13 @@
 import html
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart, StateFilter
-from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
-from aiogram import F, Router
-from aiogram.filters import Command, CommandStart, StateFilter
-from aiogram.fsm.context import FSMContext
+from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 
 from bot.keyboards.inline import (
     MenuActionCallback,
     get_welcome_inline_keyboard,
 )
-from bot.keyboards.reply import (
-    get_cancel_keyboard,
-    get_main_menu_keyboard,
-)
-from bot.states.states import ProfileForm
+from bot.keyboards.reply import get_main_menu_keyboard
 
 common_router = Router(name="common")
 
@@ -85,22 +76,20 @@ async def cmd_help(message: Message) -> None:
         "📖 <b>Справка ZAP AppSec AI Auditor:</b>\n\n"
         "/start — Главное меню и перезапуск\n"
         "/help — Вывод этого справочного сообщения\n"
-        "/cancel — Прерывание текущего ввода (FSM)\n\n"
+        "/zap_status — Проверка статуса подключения к ZAP\n\n"
         "🛡 <b>Аудит безопасности веб-сайтов (OWASP ZAP):</b>\n"
         "/check &lt;URL&gt; — Запуск сканирования и аудита уязвимостей\n"
-        "<i>Пример:</i> <code>/check http://testphp.vulnweb.com/listproducts.php?cat=1</code>\n"
-        "/zap_status — Проверка статуса подключения к ZAP\n\n"
+        "<i>Пример:</i> <code>/check http://testphp.vulnweb.com/listproducts.php?cat=1</code>\n\n"
         "💡 <b>AI-аудит (Gemini):</b>\n"
         "• ИИ-ассистент работает в связке со сканером.\n"
         "• После выполнения <code>/check</code> нажмите кнопку <b>«💡 Получить аудит и код исправлений от ИИ»</b>, чтобы нейросеть сгенерировала простое объяснение рисков и готовый промпт для AI-агентов кодогенерации (/goal).\n\n"
         "Кнопки нижнего меню:\n"
         "• <b>🛡 Проверить сайт</b> — вызов сканирования\n"
-        "• <b>ℹ️ Помощь</b> — данная справка\n"
-        "• <b>👤 Мой профиль</b> — учетная запись в БД\n"
-        "• <b>📝 Заполнить анкету</b> — анкета пользователя"
+        "• <b>🔍 Статус ZAP</b> — проверка доступности сканера\n"
+        "• <b>👤 Мой профиль</b> — учетная запись\n"
+        "• <b>ℹ️ Помощь</b> — данная справка"
     )
     await message.answer(text=help_text, reply_markup=get_main_menu_keyboard())
-
 
 
 # --------------------------------------------------------------------------
@@ -128,97 +117,6 @@ async def cmd_profile(message: Message) -> None:
 
 
 # --------------------------------------------------------------------------
-# FSM: Машина состояний (Анкета профиля)
-# --------------------------------------------------------------------------
-
-
-@common_router.message(Command("cancel"))
-@common_router.message(F.text == "❌ Отмена", StateFilter("*"))
-async def cmd_cancel_fsm(message: Message, state: FSMContext) -> None:
-    """
-    Сброс текущего состояния FSM при нажатии кнопки 'Отмена' или команде /cancel.
-    """
-    current_state = await state.get_state()
-    if current_state is None:
-        await message.answer(
-            "Нет активных действий для отмены.",
-            reply_markup=get_main_menu_keyboard(),
-        )
-        return
-
-    await state.clear()
-    await message.answer(
-        "Действие отменено.",
-        reply_markup=get_main_menu_keyboard(),
-    )
-
-
-@common_router.message(F.text == "📝 Заполнить анкету", StateFilter(None))
-async def start_fsm_profile(message: Message, state: FSMContext) -> None:
-    """
-    Запуск сценария заполнения анкеты (шаг 1: ввод имени).
-    """
-    await state.set_state(ProfileForm.waiting_for_name)
-    await message.answer(
-        "📝 <b>Шаг 1 из 3:</b> Как вас зовут?\n\n"
-        "Для отмены нажмите кнопку ниже.",
-        reply_markup=get_cancel_keyboard(),
-    )
-
-
-@common_router.message(ProfileForm.waiting_for_name, F.text)
-async def fsm_process_name(message: Message, state: FSMContext) -> None:
-    """
-    Шаг 2: валидация имени и запрос возраста.
-    """
-    name = (message.text or "").strip()
-    if len(name) < 2 or len(name) > 50:
-        await message.answer("Имя должно содержать от 2 до 50 символов. Попробуйте еще раз:")
-        return
-
-    await state.update_data(name=name)
-    await state.set_state(ProfileForm.waiting_for_age)
-    await message.answer("🔢 <b>Шаг 2 из 3:</b> Сколько вам полных лет?")
-
-
-@common_router.message(ProfileForm.waiting_for_age, F.text)
-async def fsm_process_age(message: Message, state: FSMContext) -> None:
-    """
-    Шаг 3: валидация возраста и запрос информации о себе.
-    """
-    text = (message.text or "").strip()
-    if not text.isdigit() or not (1 <= int(text) <= 120):
-        await message.answer("Пожалуйста, введите корректный возраст (число от 1 до 120):")
-        return
-
-    await state.update_data(age=int(text))
-    await state.set_state(ProfileForm.waiting_for_bio)
-    await message.answer("✍️ <b>Шаг 3 из 3:</b> Напишите пару слов о себе:")
-
-
-@common_router.message(ProfileForm.waiting_for_bio, F.text)
-async def fsm_process_bio(message: Message, state: FSMContext) -> None:
-    """
-    Финал FSM: сохранение данных, сброс состояния и вывод результата.
-    """
-    bio = (message.text or "").strip()
-    data = await state.get_data()
-    name = data.get("name")
-    age = data.get("age")
-
-    await state.clear()
-
-    summary_text = (
-        "✅ <b>Анкета успешно сохранена!</b>\n\n"
-        f"• <b>Имя:</b> {html.escape(str(name))}\n"
-        f"• <b>Возраст:</b> {age}\n"
-        f"• <b>О себе:</b> {html.escape(bio)}"
-    )
-
-    await message.answer(text=summary_text, reply_markup=get_main_menu_keyboard())
-
-
-# --------------------------------------------------------------------------
 # Обработка Inline кнопок через CallbackData
 # --------------------------------------------------------------------------
 
@@ -226,7 +124,7 @@ async def fsm_process_bio(message: Message, state: FSMContext) -> None:
 @common_router.callback_query(MenuActionCallback.filter(F.action == "features"))
 async def callback_features(callback: CallbackQuery) -> None:
     """
-    Показывает список фич архитектуры шаблона.
+    Показывает возможности сканера.
     """
     text = (
         "🛡️ <b>Возможности ZAP AppSec AI Auditor:</b>\n\n"
@@ -259,4 +157,3 @@ async def callback_close(callback: CallbackQuery) -> None:
     if callback.message:
         await callback.message.delete()
     await callback.answer()
-
