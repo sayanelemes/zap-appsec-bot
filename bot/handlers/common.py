@@ -3,13 +3,11 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy.ext.asyncio import AsyncSession
+from aiogram import F, Router
+from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
 
-from bot.database.requests import (
-    get_total_users_count,
-    get_user_by_tg_id,
-    upsert_user,
-)
 from bot.keyboards.inline import (
     MenuActionCallback,
     get_welcome_inline_keyboard,
@@ -29,25 +27,18 @@ common_router = Router(name="common")
 
 
 @common_router.message(CommandStart())
-async def cmd_start(message: Message, session: AsyncSession) -> None:
+async def cmd_start(message: Message) -> None:
     """
     Обработчик команды /start.
-    Регистрирует или обновляет пользователя в БД и выводит стартовое меню.
+    Выводит приветственное сообщение и стартовое меню.
     """
     user = message.from_user
     if not user:
         return
 
-    # Сохраняем пользователя в БД через сессию
-    db_user = await upsert_user(
-        session=session,
-        telegram_id=user.id,
-        username=user.username,
-        full_name=user.full_name,
-    )
-
+    user_name = user.full_name or user.first_name or "пользователь"
     welcome_text = (
-        f"👋 Привет, <b>{html.escape(db_user.full_name)}</b>!\n\n"
+        f"👋 Привет, <b>{html.escape(user_name)}</b>!\n\n"
         "🛡️ Добро пожаловать в <b>ZAP AppSec AI Auditor</b> — сканер веб-уязвимостей и ИИ-ассистент по безопасности.\n\n"
         "✨ <b>Что умеет бот:</b>\n"
         "• <b>/check &lt;URL&gt;</b> — Запуск быстрого сканирования сайта через <b>OWASP ZAP</b> (Spider + Active Scan)\n"
@@ -118,27 +109,20 @@ async def cmd_help(message: Message) -> None:
 
 
 @common_router.message(F.text == "👤 Мой профиль")
-async def cmd_profile(message: Message, session: AsyncSession) -> None:
+async def cmd_profile(message: Message) -> None:
     """
-    Выводит информацию о текущем пользователе из базы данных.
+    Выводит информацию о текущем пользователе Telegram.
     """
     user = message.from_user
     if not user:
         return
 
-    db_user = await get_user_by_tg_id(session, user.id)
-    if not db_user:
-        await message.answer("Пользователь не найден в базе данных. Введите /start.")
-        return
-
-    created_str = db_user.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
     profile_text = (
-        "👤 <b>Ваш профиль в БД:</b>\n\n"
-        f"• <b>Внутренний ID:</b> <code>{db_user.id}</code>\n"
-        f"• <b>Telegram ID:</b> <code>{db_user.telegram_id}</code>\n"
-        f"• <b>Username:</b> @{html.escape(db_user.username or 'не указан')}\n"
-        f"• <b>Имя:</b> {html.escape(db_user.full_name)}\n"
-        f"• <b>Дата регистрации:</b> {created_str}"
+        "👤 <b>Ваш профиль в Telegram:</b>\n\n"
+        f"• <b>Telegram ID:</b> <code>{user.id}</code>\n"
+        f"• <b>Username:</b> @{html.escape(user.username or 'не указан')}\n"
+        f"• <b>Имя:</b> {html.escape(user.full_name)}\n"
+        "• <b>Режим работы:</b> Stateless Fast Scanner (без БД)"
     )
     await message.answer(text=profile_text)
 
@@ -249,7 +233,7 @@ async def callback_features(callback: CallbackQuery) -> None:
         "• <b>OWASP ZAP Fast Scan:</b> Spider + активный поиск уязвимостей (SQLi, XSS, CSRF, RCE, IDOR).\n"
         "• <b>Двухблочный ИИ-аудит (Gemini):</b> Простое объяснение рисков + пошаговый промпт с кодом для Cursor / Claude Code / Antigravity.\n"
         "• <b>Детальные HTML-отчеты:</b> Мгновенная генерация полного отчета ZAP файлом.\n"
-        "• <b>Автономность и надежность:</b> Асинхронный aiogram 3.x, сессии SQLAlchemy 2.0, защита от спама."
+        "• <b>Автономность и скорость:</b> Асинхронный aiogram 3.x, работа без БД, защита от спама."
     )
     if callback.message:
         await callback.message.answer(text)
@@ -257,13 +241,12 @@ async def callback_features(callback: CallbackQuery) -> None:
 
 
 @common_router.callback_query(MenuActionCallback.filter(F.action == "stats"))
-async def callback_stats(callback: CallbackQuery, session: AsyncSession) -> None:
+async def callback_stats(callback: CallbackQuery) -> None:
     """
-    Запрашивает из базы данных количество пользователей и выводит alert.
+    Выводит статус режима работы бота.
     """
-    count = await get_total_users_count(session)
     await callback.answer(
-        text=f"👥 Всего пользователей в базе: {count}",
+        text="⚡ Бот работает в быстром автономном режиме (без БД).",
         show_alert=True,
     )
 

@@ -10,10 +10,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Установка системных зависимостей при необходимости компиляции
+# Установка базовых системных утилит
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -33,4 +31,4 @@ COPY --chown=botuser:botuser . .
 USER botuser
 
 # Команда по умолчанию
-CMD ["python", "-m", "bot.main"]
+CMD ["python", "main.py"]

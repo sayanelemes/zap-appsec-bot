@@ -7,11 +7,6 @@ google-genai>=1.0.0
 # Settings & Validation
 pydantic-settings>=2.6.0,<3.0.0
 
-# Database & ORM
-SQLAlchemy>=2.0.36,<3.0.0
-aiosqlite>=0.20.0
-asyncpg>=0.30.0
-alembic>=1.14.0
 
 # Optional Redis storage for FSM
 redis>=5.2.0

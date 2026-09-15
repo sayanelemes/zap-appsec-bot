@@ -15,9 +15,6 @@ class Settings(BaseSettings):
     # Обязательный токен бота
     BOT_TOKEN: SecretStr
 
-    # Строка подключения к базе данных
-    DB_URL: str = "sqlite+aiosqlite:///bot.db"
-
     # Список Telegram ID администраторов (принимает строку, число или список, возвращает list[int])
     ADMIN_IDS: Union[list[int], str, int] = []
 
@@ -38,6 +35,7 @@ class Settings(BaseSettings):
     MAX_CONTEXT_HISTORY: int = 10
 
     # Конфигурация OWASP ZAP
+    ZAP_URL: str = "http://zap:8080"
     ZAP_PROXY: str = "http://127.0.0.1:8090"
     ZAP_API_KEY: SecretStr | None = None
 

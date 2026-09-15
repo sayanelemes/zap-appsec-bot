@@ -13,9 +13,8 @@ from pydantic import ValidationError
 
 from bot.config import settings
 from bot.config.config import get_settings
-from bot.database import check_db_connection, create_engine, create_session_pool
 from bot.handlers import get_root_router
-from bot.middlewares import DbSessionMiddleware, ThrottlingMiddleware
+from bot.middlewares import ThrottlingMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -114,33 +113,13 @@ async def main() -> None:
     )
     dp = Dispatcher(storage=storage)
 
-    # 5. Инициализация подключения к БД
-    engine = create_engine(cfg.DB_URL, echo=False)
-    session_pool = create_session_pool(engine)
-
-    try:
-        await check_db_connection(engine)
-    except Exception:
-        logger.critical(
-            "Не удалось подключиться к БД по адресу '%s'. Проверьте настройки DB_URL!",
-            cfg.DB_URL,
-        )
-        await engine.dispose()
-        await bot.session.close()
-        sys.exit(1)
-
-    # 6. Регистрация Middlewares
+    # 5. Регистрация Middlewares
     # Антиспам (внешний мидлварь)
     throttling = ThrottlingMiddleware(rate_limit=cfg.THROTTLE_RATE)
     dp.message.outer_middleware(throttling)
     dp.callback_query.outer_middleware(throttling)
 
-    # Проброс сессии БД (внутренний мидлварь)
-    db_middleware = DbSessionMiddleware(session_pool=session_pool)
-    dp.message.middleware(db_middleware)
-    dp.callback_query.middleware(db_middleware)
-
-    # 7. Подключение роутеров
+    # 6. Подключение роутеров
     dp.include_router(get_root_router())
 
     # 8. Запуск бота с Graceful Shutdown
@@ -176,10 +155,6 @@ async def main() -> None:
                 )
             except Exception:
                 pass
-
-        # Закрытие соединений с БД
-        logger.info("Закрытие пула соединений с БД...")
-        await engine.dispose()
 
         # Закрытие сессии бота
         logger.info("Закрытие HTTP-сессии бота...")

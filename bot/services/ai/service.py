@@ -1,11 +1,15 @@
 import asyncio
 import logging
-from typing import AsyncIterator, Optional, Sequence
+from typing import Any, AsyncIterator, Optional, Protocol, Sequence
 from google import genai
 from google.genai import errors, types
 
 
-from bot.database.models.dialog import DialogMessage
+class DialogMessageProtocol(Protocol):
+    role: str
+    content: str
+
+
 from bot.services.ai.client import create_gemini_client
 from bot.services.ai.prompts import DEFAULT_SYSTEM_INSTRUCTION
 
@@ -35,7 +39,7 @@ class GeminiService:
 
     def format_history_to_contents(
         self,
-        history: Sequence[DialogMessage],
+        history: Sequence[DialogMessageProtocol] | Sequence[Any],
         current_text: Optional[str] = None,
         media_part: Optional[types.Part] = None,
     ) -> list[types.Content]:

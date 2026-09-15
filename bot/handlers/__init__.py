@@ -1,7 +1,6 @@
 from aiogram import Router
 from aiogram.types import Message
 
-from bot.handlers.ai_chat import ai_router
 from bot.handlers.common import common_router
 from bot.handlers.errors import errors_router
 from bot.handlers.zap_scan import zap_router
