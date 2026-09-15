@@ -132,16 +132,24 @@ async def main() -> None:
             )
 
         # Настройка кнопки меню чата Telegram (TMA)
-        try:
-            await bot.set_chat_menu_button(
-                menu_button=MenuButtonWebApp(
-                    text="SOC Scanner",
-                    web_app=WebAppInfo(url=cfg.WEBAPP_URL),
+        # Telegram API строго требует HTTPS для WebAppInfo
+        if cfg.WEBAPP_URL and cfg.WEBAPP_URL.lower().startswith("https://"):
+            try:
+                await bot.set_chat_menu_button(
+                    menu_button=MenuButtonWebApp(
+                        text="SOC Scanner",
+                        web_app=WebAppInfo(url=cfg.WEBAPP_URL),
+                    )
                 )
+                logger.info("Кнопка меню чата Telegram настроена на TMA: %s", cfg.WEBAPP_URL)
+            except Exception as e:
+                logger.warning("Не удалось установить кнопку меню чата TMA: %s", e)
+        else:
+            logger.info(
+                "Параметр WEBAPP_URL (%s) не использует HTTPS (Telegram API требует строго https://). "
+                "Кнопка меню WebApp пропущена. Для работы Mini App внутри Telegram укажите HTTPS URL в .env: WEBAPP_URL=https://...",
+                cfg.WEBAPP_URL,
             )
-            logger.info("Кнопка меню чата Telegram настроена на TMA: %s", cfg.WEBAPP_URL)
-        except Exception as e:
-            logger.warning("Не удалось установить кнопку меню чата TMA: %s", e)
 
         # Конфигурация веб-сервера FastAPI (Uvicorn)
         uvicorn_config = uvicorn.Config(

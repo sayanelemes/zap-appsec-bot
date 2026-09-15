@@ -95,6 +95,10 @@ else
     echo "⚠️ Виртуальное окружение не найдено, запуск через системный python3"
 fi
 
-# 5. Запуск Telegram-бота на переднем плане
+# 5. Очистка старых экземпляров бота для предотвращения TelegramConflictError
+pkill -f "python.*main\.py" >/dev/null 2>&1 || true
+sleep 1
+
+# 6. Запуск Telegram-бота на переднем плане
 echo "🤖 Запуск Telegram-бота (main.py)..."
 exec python main.py

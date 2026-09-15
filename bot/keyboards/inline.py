@@ -15,13 +15,15 @@ class MenuActionCallback(CallbackData, prefix="menu"):
 def get_welcome_inline_keyboard(webapp_url: str | None = None) -> InlineKeyboardMarkup:
     """
     Создает Inline-клавиатуру для стартового сообщения с кнопкой Mini App.
+    Telegram API требует строго HTTPS для WebAppInfo (http:// вызывает ошибку).
     """
     builder = InlineKeyboardBuilder()
 
-    if webapp_url:
+    is_https = bool(webapp_url and str(webapp_url).strip().lower().startswith("https://"))
+    if is_https:
         builder.button(
             text="🛡️ Открыть Mini App (SOC)",
-            web_app=WebAppInfo(url=webapp_url),
+            web_app=WebAppInfo(url=str(webapp_url).strip()),
         )
 
     builder.button(
@@ -37,7 +39,7 @@ def get_welcome_inline_keyboard(webapp_url: str | None = None) -> InlineKeyboard
         callback_data=MenuActionCallback(action="close"),
     )
 
-    if webapp_url:
+    if is_https:
         builder.adjust(1, 2, 1)
     else:
         builder.adjust(2, 1)
