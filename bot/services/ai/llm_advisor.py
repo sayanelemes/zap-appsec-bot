@@ -161,15 +161,142 @@ def sanitize_text_for_llm(text: Any, max_len: int = 250) -> str:
     return val[:max_len]
 
 
+# Приоритетный список моделей Gemini в порядке предпочтения.
+# При 503/429 последовательно перебираем с экспоненциальным backoff.
+GEMINI_FALLBACK_CHAIN = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
+]
+
+# Заглушка-отчет: возвращается когда ВСЕ модели из цепочки недоступны
+_FALLBACK_STUB_TEMPLATE = """\
+◈ <b>AI-аудитор временно перегружен</b>
+
+<blockquote>
+• Серверы Gemini испытывают высокую нагрузку (503 UNAVAILABLE / RESOURCE_EXHAUSTED).
+• Рекомендации формируются в базовом режиме — без детальных /goal промптов.
+</blockquote>
+
+────────────────────────
+
+{vuln_list}
+
+────────────────────────
+
+💡 <b>Что делать:</b> повторите запрос через 30–60 секунд. Нейросеть автоматически подберёт доступную модель.
+"""
+
+_FALLBACK_VULN_ROW = "◈ <b>{name}</b> [Риск: {risk}] — {url}\n"
+
+
 class LlmAdvisorService:
     """
     Асинхронный сервис AI-аудита безопасности веб-приложений через Google Gemini API.
+
+    Стратегия отказоустойчивости:
+    - Перебирает GEMINI_FALLBACK_CHAIN по приоритету.
+    - При 503/429 делает до 2 повторных попыток с экспоненциальным backoff (1.5с, 3с).
+    - При исчерпании всех моделей возвращает структурированную заглушку без краша.
     """
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-3.6-flash"):
-        self.api_key = api_key or (settings.GEMINI_API_KEY.get_secret_value() if settings and settings.GEMINI_API_KEY else None)
-        self.model = model
-        self.client: Optional[genai.Client] = create_gemini_client(self.api_key)
+    MAX_RETRIES_PER_MODEL = 2
+    BACKOFF_BASE_SECONDS = 1.5  # backoff(attempt) = BASE * 2^(attempt-1)
+
+    def __init__(self, api_key: str | None = None, model: str | None = None):
+        self.api_key = api_key or (
+            settings.GEMINI_API_KEY.get_secret_value()
+            if settings and settings.GEMINI_API_KEY
+            else None
+        )
+        # Пользовательская модель ставится первой в цепочке
+        self._preferred_model = model
+        self.client: genai.Client | None = create_gemini_client(self.api_key)
+
+    def _build_model_chain(self) -> list[str]:
+        """Собирает дедуплицированную цепочку моделей с учётом предпочтения."""
+        chain = []
+        seen: set[str] = set()
+        candidates = (
+            [self._preferred_model] if self._preferred_model else []
+        ) + GEMINI_FALLBACK_CHAIN
+        for m in candidates:
+            if m and m not in seen:
+                seen.add(m)
+                chain.append(m)
+        return chain
+
+    @staticmethod
+    def _is_transient(exc: errors.APIError) -> bool:
+        """Проверяет, является ли ошибка временной (стоит повторить попытку)."""
+        transient_codes = {429, 503, 504, 500}
+        transient_keywords = {"UNAVAILABLE", "RESOURCE_EXHAUSTED", "OVERLOADED", "RATE_LIMIT"}
+        exc_str = str(exc).upper()
+        return exc.code in transient_codes or any(kw in exc_str for kw in transient_keywords)
+
+    async def _try_generate(self, model_name: str, prompt: str) -> str | None:
+        """
+        Пытается вызвать модель с экспоненциальным backoff при временных ошибках.
+        Возвращает текст ответа или None при окончательной неудаче.
+        """
+        for attempt in range(1, self.MAX_RETRIES_PER_MODEL + 1):
+            try:
+                response = await self.client.aio.models.generate_content(  # type: ignore[union-attr]
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.3,
+                        system_instruction=APPSEC_SYSTEM_INSTRUCTION,
+                    ),
+                )
+                if response and response.text:
+                    logger.info("Модель %s вернула ответ (%d симв.)", model_name, len(response.text))
+                    return response.text
+                logger.warning("Модель %s вернула пустой ответ.", model_name)
+                return None
+
+            except errors.APIError as e:
+                last_msg = str(e.message or e)
+                if self._is_transient(e) and attempt < self.MAX_RETRIES_PER_MODEL:
+                    delay = self.BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                    logger.warning(
+                        "Модель %s временно недоступна (код %s, попытка %d/%d). "
+                        "Экспоненциальный backoff: %.1f с...",
+                        model_name, e.code, attempt, self.MAX_RETRIES_PER_MODEL, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.warning(
+                    "Модель %s вернула ошибку API (код %s): %s. Переходим к следующей.",
+                    model_name, getattr(e, "code", "?"), last_msg,
+                )
+                return None
+
+            except Exception as e:
+                logger.error("Непредвиденная ошибка при вызове модели %s: %s", model_name, e)
+                return None
+
+        return None
+
+    def _build_fallback_stub(self, alerts: list[dict[str, Any]], target_url: str) -> list[str]:
+        """Структурированная заглушка когда все модели недоступны."""
+        rows = "".join(
+            _FALLBACK_VULN_ROW.format(
+                name=sanitize_text_for_llm(a.get("alert", "Уязвимость"), 80),
+                risk=a.get("risk", "Unknown"),
+                url=sanitize_text_for_llm(a.get("url", target_url), 100),
+            )
+            for a in alerts
+        )
+        stub_text = _FALLBACK_STUB_TEMPLATE.format(vuln_list=rows.strip() or "Уязвимости не указаны")
+        header = (
+            f"⚡ <b>AppSec Fixes & AI Prompts</b> ◈ <code>{target_url}</code>\n"
+            f"────────────────────────\n\n"
+        )
+        return split_text_safe(header + stub_text, max_chunk_size=3900)
 
     async def analyze_vulnerabilities(
         self,
@@ -177,8 +304,8 @@ class LlmAdvisorService:
         target_url: str,
     ) -> list[str]:
         """
-        Принимает сырой список алертов ZAP, выполняет дедупликацию, выполняет санитизацию,
-        формирует запрос к LLM и возвращает список сообщений-рекомендаций.
+        Принимает сырой список алертов ZAP, выполняет дедупликацию и санитизацию,
+        формирует запрос к LLM с полным fallback-цикл и возвращает список чанков.
         """
         filtered_alerts = deduplicate_alerts(alerts)
         if not filtered_alerts:
@@ -194,26 +321,25 @@ class LlmAdvisorService:
                 "Пожалуйста, добавьте ключ для получения автоматических рекомендаций по коду."
             ]
 
-        # Формируем строго санитизированное описание уязвимостей для промпта (без сырого HTML/JS)
+        # Формируем санитизированный промпт
         items_desc = []
         for idx, item in enumerate(filtered_alerts, 1):
             alert_name = sanitize_text_for_llm(item.get("alert", "Unknown"), 120)
-            risk = sanitize_text_for_llm(item.get("risk", "Low"), 30)
-            param = sanitize_text_for_llm(item.get("param", ""), 80) or "—"
-            url = sanitize_text_for_llm(item.get("url", target_url), 200)
-            method = sanitize_text_for_llm(item.get("method", "GET"), 10)
-            cwe = sanitize_text_for_llm(item.get("cweid", "—"), 20)
-            desc = sanitize_text_for_llm(item.get("description", ""), 250)
-            evidence = sanitize_text_for_llm(item.get("evidence", ""), 100)
-
+            risk       = sanitize_text_for_llm(item.get("risk", "Low"), 30)
+            param      = sanitize_text_for_llm(item.get("param", ""), 80) or "—"
+            url        = sanitize_text_for_llm(item.get("url", target_url), 200)
+            method     = sanitize_text_for_llm(item.get("method", "GET"), 10)
+            cwe        = sanitize_text_for_llm(item.get("cweid", "—"), 20)
+            desc       = sanitize_text_for_llm(item.get("description", ""), 250)
+            evidence   = sanitize_text_for_llm(item.get("evidence", ""), 100)
             items_desc.append(
                 f"### Уязвимость #{idx}: {alert_name} (Риск: {risk})\n"
                 f"- Целевой URL / Эндпоинт: {url}\n"
                 f"- HTTP Метод: {method}\n"
                 f"- Уязвимый параметр / заголовок / селектор: {param}\n"
                 f"- CWE ID: {cwe}\n"
-                f"- Evidence (фрагмент детекции): {evidence if evidence else 'Не указано'}\n"
-                f"- Техническое описание проблемы: {desc}\n"
+                f"- Evidence: {evidence or 'Не указано'}\n"
+                f"- Техническое описание: {desc}\n"
             )
 
         prompt_body = (
@@ -221,69 +347,28 @@ class LlmAdvisorService:
             + "\n".join(items_desc)
             + "\nДля КАЖДОЙ уязвимости строго сформируй два блока: "
             "(1) '💡 Что это такое простыми словами' и "
-            "(2) '🤖 Промпт для AI-агента (Cursor / Antigravity / Claude Code)' строго по системной инструкции."
+            "(2) '🤖 Промпт для AI-агента' строго по системной инструкции."
         )
 
-        models_to_try = [
-            self.model,
-            "gemini-3.6-flash",
-            "gemini-3.7-flash",
-            "gemini-3.5-flash",
-            "gemini-flash-latest",
-        ]
-        # Убираем дубликаты сохраняя порядок
-        seen_models = set()
-        models_to_try = [m for m in models_to_try if not (m in seen_models or seen_models.add(m))]
-
-        raw_response_text = ""
-        last_error_msg = ""
-
-        for model_name in models_to_try:
-            for attempt in range(1, 3):
-                try:
-                    response = await self.client.aio.models.generate_content(
-                        model=model_name,
-                        contents=prompt_body,
-                        config=types.GenerateContentConfig(
-                            temperature=0.3,  # Низкая температура для строгих технических рекомендаций
-                            system_instruction=APPSEC_SYSTEM_INSTRUCTION,
-                        ),
-                    )
-                    if response and response.text:
-                        raw_response_text = response.text
-                        break
-                except errors.APIError as e:
-                    last_error_msg = str(e.message or e)
-                    # Если 503 (высокая нагрузка) или 429 (рейтлимит) — кратковременная пауза и повтор
-                    is_transient = e.code in (503, 429) or "UNAVAILABLE" in str(e).upper() or "RESOURCE_EXHAUSTED" in str(e).upper()
-                    if is_transient and attempt < 2:
-                        logger.warning(
-                            "Модель %s временно перегружена (код %s, попытка %d/2). Ожидание 1.5с...",
-                            model_name, e.code, attempt,
-                        )
-                        await asyncio.sleep(1.5)
-                        continue
-                    logger.warning("Модель %s вернула ошибку API (%s). Пробуем следующую...", model_name, e)
-                    break
-                except Exception as e:
-                    last_error_msg = str(e)
-                    logger.error("Ошибка при генерации рекомендаций безопасности через %s: %s", model_name, e)
-                    break
-
-            if raw_response_text:
+        # Перебор моделей fallback-цепочки
+        model_chain = self._build_model_chain()
+        raw_text = ""
+        for model_name in model_chain:
+            logger.info("AI-аудит: пробуем модель %s...", model_name)
+            raw_text = await self._try_generate(model_name, prompt_body) or ""
+            if raw_text:
                 break
+            logger.warning("Модель %s не дала результата, переходим к следующей.", model_name)
 
-        if not raw_response_text:
-            logger.error("Все доступные AI-модели вернули ошибку. Последняя: %s", last_error_msg)
-            return [
-                "⚠️ <b>Нейросеть временно недоступна:</b> серверы Gemini перегружены (высокий спрос на модель / 503).\n"
-                "Пожалуйста, повторите запрос через несколько секунд."
-            ]
+        if not raw_text:
+            logger.error(
+                "Все %d моделей из fallback-цепочки недоступны. Возвращаем базовую заглушку.",
+                len(model_chain),
+            )
+            return self._build_fallback_stub(filtered_alerts, target_url)
 
         header = (
             f"⚡ <b>AppSec Fixes & AI Prompts</b> ◈ <code>{target_url}</code>\n"
             f"────────────────────────\n\n"
         )
-        full_text = header + raw_response_text
-
-        return split_text_safe(full_text, max_chunk_size=3900)
+        return split_text_safe(header + raw_text, max_chunk_size=3900)

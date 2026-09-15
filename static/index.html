@@ -276,6 +276,11 @@
     let pollTimer = null;
     let lastLogCount = 0;
 
+    // Набор ID открытых карточек уязвимостей (ключ = индекс + title для стабильности)
+    const openedFindingIds = new Set();
+    // Снимок последнего отрендеренного списка findings (для diff-проверки)
+    let lastFindingsSnapshot = '';
+
     // Выбор режима сканирования
     function selectMode(mode) {
       currentMode = mode;
@@ -631,13 +636,28 @@
       });
     }
 
+    // Стабильный ключ карточки уязвимости для персистентности аккордеона
+    function findingKey(f, idx) {
+      return `${idx}::${f.title || ''}::${f.severity || ''}`;
+    }
+
     // Отображение карточек уязвимостей с аккордеоном
+    // УМНЫЙ РЕНДЕР: не перезаписывает DOM если данные не изменились (защита от схлопывания при polling)
     function renderFindings(findings) {
       const container = document.getElementById('findings-container');
       const countPill = document.getElementById('findings-count');
       countPill.textContent = findings.length;
 
+      // Diff-проверка: если снимок данных не изменился — DOM не трогаем
+      const snapshot = JSON.stringify(findings.map(f => ({ t: f.title, s: f.severity, c: f.cvss })));
+      if (snapshot === lastFindingsSnapshot && container.children.length > 0) {
+        return; // данные те же — аккордеон не сбрасываем
+      }
+      lastFindingsSnapshot = snapshot;
+
       if (findings.length === 0) {
+        lastFindingsSnapshot = '';
+        openedFindingIds.clear();
         container.innerHTML = `
           <div class="text-center py-6 text-gray-600 text-xs">
             ${isRunning ? '⏳ Сканирование в процессе, анализ уязвимостей...' : 'Уязвимостей не обнаружено.'}
@@ -647,16 +667,21 @@
       }
 
       const severityConfig = {
-        CRITICAL: { border: 'border-l-rose-500', bg: 'bg-rose-950/30', badge: 'bg-rose-900/60 text-rose-300 border-rose-700' },
-        HIGH: { border: 'border-l-orange-500', bg: 'bg-orange-950/30', badge: 'bg-orange-900/60 text-orange-300 border-orange-700' },
-        MEDIUM: { border: 'border-l-amber-500', bg: 'bg-amber-950/30', badge: 'bg-amber-900/60 text-amber-300 border-amber-700' },
-        LOW: { border: 'border-l-blue-500', bg: 'bg-blue-950/30', badge: 'bg-blue-900/60 text-blue-300 border-blue-700' },
+        CRITICAL: { border: 'border-l-rose-500',   badge: 'bg-rose-900/60 text-rose-300 border-rose-700'     },
+        HIGH:     { border: 'border-l-orange-500',  badge: 'bg-orange-900/60 text-orange-300 border-orange-700' },
+        MEDIUM:   { border: 'border-l-amber-500',   badge: 'bg-amber-900/60 text-amber-300 border-amber-700'   },
+        LOW:      { border: 'border-l-blue-500',    badge: 'bg-blue-900/60 text-blue-300 border-blue-700'      },
       };
 
       container.innerHTML = findings.map((f, idx) => {
-        const sev = f.severity || 'LOW';
-        const cfg = severityConfig[sev] || severityConfig.LOW;
+        const key     = findingKey(f, idx);
+        const sev     = f.severity || 'LOW';
+        const cfg     = severityConfig[sev] || severityConfig.LOW;
         const cvssText = f.cvss ? `CVSS: ${f.cvss}` : sev;
+        // Восстанавливаем состояние открытых карточек после перерисовки
+        const wasOpen  = openedFindingIds.has(key);
+        const detailDisplay = wasOpen ? 'block' : 'none';
+        const chevronRot    = wasOpen ? 'rotate(180deg)' : 'rotate(0deg)';
 
         const descHtml = f.description
           ? `<div class="w-full">
@@ -674,18 +699,19 @@
 
         return `
           <div class="border border-[#21262d] border-l-4 ${cfg.border} bg-[#0d1117] rounded overflow-hidden">
-            <div class="flex items-start justify-between gap-2 p-3 cursor-pointer select-none" onclick="toggleAccordion(${idx})">
+            <div class="flex items-start justify-between gap-2 p-3 cursor-pointer select-none"
+                 onclick="toggleAccordion(${idx}, '${key.replace(/'/g, '\\\'')}')" >
               <div class="flex flex-col gap-1 min-w-0 flex-1">
                 <span class="text-xs font-semibold text-white hover:text-emerald-400 transition-colors break-words">${escapeHtml(f.title)}</span>
                 ${f.param ? `<span class="text-[11px] text-gray-400 font-mono truncate">Параметр: <code class="text-emerald-400">${escapeHtml(f.param)}</code></span>` : ''}
               </div>
               <div class="flex items-center gap-2 flex-shrink-0 mt-0.5">
                 <span class="text-[10px] font-bold px-2 py-0.5 rounded border whitespace-nowrap ${cfg.badge}">${cvssText}</span>
-                <span id="chevron-${idx}" class="text-gray-500 text-xs transition-transform duration-200 inline-block">▼</span>
+                <span id="chevron-${idx}" class="text-gray-500 text-xs transition-transform duration-200 inline-block"
+                      style="transform:${chevronRot};">▼</span>
               </div>
             </div>
-            <!-- Аккордеон — используем style.display вместо class hidden/flex (избегаем конфликта Tailwind JIT) -->
-            <div id="details-${idx}" style="display:none;" class="px-3 pb-3 border-t border-[#21262d] pt-2">
+            <div id="details-${idx}" style="display:${detailDisplay};" class="px-3 pb-3 border-t border-[#21262d] pt-2">
               <div class="flex flex-col gap-2 text-xs text-gray-300 w-full">
                 ${descHtml}
                 ${badgesHtml}
@@ -696,18 +722,20 @@
       }).join('');
     }
 
-    // Переключение аккордеона карточки (используем style.display, а не hidden/flex класс)
-    function toggleAccordion(idx) {
+    // Переключение аккордеона — персистирует состояние в openedFindingIds
+    function toggleAccordion(idx, key) {
       haptic('impact', 'light');
       const details = document.getElementById(`details-${idx}`);
       const chevron = document.getElementById(`chevron-${idx}`);
-      const isOpen = details.style.display !== 'none' && details.style.display !== '';
+      const isOpen  = details.style.display === 'block';
       if (isOpen) {
         details.style.display = 'none';
         chevron.style.transform = 'rotate(0deg)';
+        openedFindingIds.delete(key);
       } else {
         details.style.display = 'block';
         chevron.style.transform = 'rotate(180deg)';
+        openedFindingIds.add(key);
       }
     }
 
