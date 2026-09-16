@@ -67,6 +67,34 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.update_data(last_bot_msg_id=None, extra_msg_ids=[])
 
 
+@common_router.message(Command("app", "tma"))
+async def cmd_app(message: Message) -> None:
+    """
+    Прямой запуск Telegram Mini App по команде /app или /tma.
+    Гарантирует открытие со свежей ссылкой без кэширования Telegram.
+    """
+    webapp_url = settings.WEBAPP_URL if settings else None
+    if webapp_url and str(webapp_url).strip().lower().startswith("https://"):
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🛡️ Открыть Mini App (SOC)", web_app=WebAppInfo(url=str(webapp_url).strip()))
+        ]])
+        await message.answer(
+            f"🚀 <b>Панель управления SOC Scanner (TMA):</b>\n\n"
+            f"🌐 <code>{html.escape(str(webapp_url).strip())}</code>\n\n"
+            f"Нажмите кнопку ниже для открытия:",
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
+    else:
+        await message.answer(
+            "⚠️ <b>Mini App URL не настроен или не использует HTTPS.</b>\n"
+            "Убедитесь, что Cloudflare туннель запущен: <code>make tunnel-up</code>.",
+            parse_mode="HTML",
+        )
+
+
+
 @common_router.message(F.text == "🛡 Проверить сайт")
 async def cmd_check_hint(message: Message, state: FSMContext) -> None:
     """

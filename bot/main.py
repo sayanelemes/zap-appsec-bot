@@ -56,13 +56,23 @@ def setup_logging(log_level_str: str) -> None:
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
 
 
-async def notify_admins(bot: Bot, admin_ids: Sequence[int], text: str) -> None:
+async def notify_admins(
+    bot: Bot,
+    admin_ids: Sequence[int],
+    text: str,
+    reply_markup: Any = None,
+) -> None:
     """
     Отправляет сервисное уведомление администраторам (например, о запуске/остановке).
     """
     for admin_id in admin_ids:
         try:
-            await bot.send_message(chat_id=admin_id, text=text)
+            await bot.send_message(
+                chat_id=admin_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
         except Exception as e:
             logger.warning(
                 "Не удалось отправить сервисное уведомление админу %s: %s",
@@ -123,12 +133,22 @@ async def main() -> None:
         bot_info = await bot.get_me()
         logger.info("Бот успешно авторизован: @%s (ID: %s)", bot_info.username, bot_info.id)
 
-        # Оповещение администраторов о старте
+        # Оповещение администраторов о старте с прямой инлайн-кнопкой Mini App
+        tma_kb = None
+        tma_text_info = ""
+        if cfg.WEBAPP_URL and cfg.WEBAPP_URL.lower().startswith("https://"):
+            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+            tma_kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🛡️ Открыть Mini App (SOC)", web_app=WebAppInfo(url=cfg.WEBAPP_URL))
+            ]])
+            tma_text_info = f"\n\n🌐 <b>TMA:</b> <code>{cfg.WEBAPP_URL}</code>"
+
         if cfg.ADMIN_IDS:
             await notify_admins(
                 bot=bot,
                 admin_ids=cfg.ADMIN_IDS,
-                text=f"🚀 <b>{cfg.BOT_NAME} (@{bot_info.username}) успешно запущен!</b>",
+                text=f"🚀 <b>{cfg.BOT_NAME} (@{bot_info.username}) успешно запущен!</b>{tma_text_info}",
+                reply_markup=tma_kb,
             )
 
         # Настройка кнопки меню чата Telegram (TMA)

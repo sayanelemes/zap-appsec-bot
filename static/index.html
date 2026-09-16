@@ -6,19 +6,35 @@
   <title>ZAP_DAST // SOC Scanner</title>
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    // Немедленное уведомление Telegram для скрытия экрана ожидания ("окно появляется но нету загрузки")
+    (function() {
+      try {
+        var tg = window.Telegram && window.Telegram.WebApp;
+        if (tg) {
+          tg.ready();
+          tg.expand();
+          if (tg.setHeaderColor) tg.setHeaderColor('#0a0c10');
+          if (tg.setBackgroundColor) tg.setBackgroundColor('#0a0c10');
+        }
+      } catch(e) {}
+    })();
+  </script>
+
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Google Fonts: JetBrains Mono -->
+
+  <!-- Google Fonts: JetBrains Mono с fallback без блокировки рендера -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,600;0,700;1,400&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 
   <script>
     tailwind.config = {
       theme: {
         extend: {
           fontFamily: {
-            mono: ['"JetBrains Mono"', 'monospace'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
           },
           colors: {
             soc: {
@@ -227,17 +243,17 @@
     // Инициализация Telegram WebApp с фиксацией от скрытия/смахивания
     const tg = window.Telegram?.WebApp;
     if (tg) {
-      tg.ready();
-      tg.expand();
-      // Запрос полноэкранного режима (Telegram 7.7+)
-      if (tg.requestFullscreen) {
-        try { tg.requestFullscreen(); } catch(e) { /* не поддерживается */ }
+      try {
+        tg.ready();
+        tg.expand();
+        if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
+        if (tg.isVerticalSwipesEnabled !== undefined) tg.isVerticalSwipesEnabled = false;
+        if (tg.enableClosingConfirmation) tg.enableClosingConfirmation();
+        if (tg.setHeaderColor) tg.setHeaderColor('#0a0c10');
+        if (tg.setBackgroundColor) tg.setBackgroundColor('#0a0c10');
+      } catch(e) {
+        console.debug('TMA init error:', e);
       }
-      if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
-      if (tg.isVerticalSwipesEnabled !== undefined) tg.isVerticalSwipesEnabled = false;
-      if (tg.enableClosingConfirmation) tg.enableClosingConfirmation();
-      if (tg.setHeaderColor) tg.setHeaderColor('#0a0c10');
-      if (tg.setBackgroundColor) tg.setBackgroundColor('#0a0c10');
 
       // Принудительно удерживаем Mini App открытым — повторяем expand каждые 3 секунды
       setInterval(() => {
