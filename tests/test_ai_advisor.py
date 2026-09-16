@@ -11,6 +11,7 @@ class TestAiAdvisor(unittest.TestCase):
     def test_system_prompt_structure(self):
         """Проверка структуры системного промпта AppSec AI аудитора"""
         self.assertIn("Ты — AppSec аудитор", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("КОНТЕКСТ РАБОТЫ", APPSEC_SYSTEM_INSTRUCTION)
         self.assertIn("ШАГ 1 — ВАЛИДАЦИЯ АЛЕРТА", APPSEC_SYSTEM_INSTRUCTION)
         self.assertIn("REAL", APPSEC_SYSTEM_INSTRUCTION)
         self.assertIn("FALSE_POSITIVE", APPSEC_SYSTEM_INSTRUCTION)
@@ -22,8 +23,10 @@ class TestAiAdvisor(unittest.TestCase):
         self.assertIn("ШАГ 4 — ФОРМИРОВАНИЕ ПРОМПТА ДЛЯ КОДЕРА", APPSEC_SYSTEM_INSTRUCTION)
         self.assertIn("--- НАЧАЛО ПРОМПТА ---", APPSEC_SYSTEM_INSTRUCTION)
         self.assertIn("--- КОНЕЦ ПРОМПТА ---", APPSEC_SYSTEM_INSTRUCTION)
-        self.assertIn("Чего НЕ делать", APPSEC_SYSTEM_INSTRUCTION)
-        self.assertIn("Проверка", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("Не трогать:", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("Критерии приёмки:", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("РАБОТА С ЛЮБЫМИ САЙТАМИ", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("testfire.net", APPSEC_SYSTEM_INSTRUCTION)
 
 
     def test_deduplication(self):
