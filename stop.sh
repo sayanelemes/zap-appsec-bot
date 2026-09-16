@@ -25,5 +25,12 @@ fi
 # Очистка блокировки домашней директории ZAP, чтобы следующий запуск прошел успешно
 rm -f "$HOME/.ZAP/.homelock"
 
-# 4. Сообщение в консоль (по требованию ТЗ)
-echo "✅ ZAP и Telegram-бот успешно остановлены. Память освобождена."
+# 4. Остановка фонового Cloudflare Tunnel
+if [ -f "./tunnel.sh" ]; then
+    chmod +x ./tunnel.sh
+    ./tunnel.sh stop >/dev/null 2>&1 || true
+fi
+
+# 5. Сообщение в консоль (по требованию ТЗ)
+echo "✅ ZAP, Telegram-бот и Cloudflare Tunnel успешно остановлены. Память освобождена."
+

@@ -123,6 +123,14 @@ if command -v lsof >/dev/null 2>&1 && lsof -ti :8000 >/dev/null 2>&1; then
     sleep 3
 fi
 
-# 6. Запуск Telegram-бота на переднем плане
+# 6. Автоматический запуск Cloudflare Tunnel для Telegram Mini App
+if [ -f "./tunnel.sh" ] && command -v cloudflared >/dev/null 2>&1; then
+    echo "🌐 Запуск Cloudflare Tunnel для работы Mini App..."
+    chmod +x ./tunnel.sh
+    ./tunnel.sh start || true
+fi
+
+# 7. Запуск Telegram-бота на переднем плане
 echo "🤖 Запуск Telegram-бота (main.py)..."
 exec python main.py
+
