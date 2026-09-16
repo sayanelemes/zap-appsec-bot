@@ -10,17 +10,18 @@ from bot.services.ai.formatter import format_telegram_html
 class TestAiAdvisor(unittest.TestCase):
     def test_system_prompt_structure(self):
         """Проверка структуры системного промпта AppSec AI аудитора"""
-        self.assertIn("Ты — ведущий Senior AppSec аудитор", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("Ты — AppSec аудитор", APPSEC_SYSTEM_INSTRUCTION)
         self.assertIn("ШАГ 1 — ВАЛИДАЦИЯ АЛЕРТА", APPSEC_SYSTEM_INSTRUCTION)
         self.assertIn("REAL", APPSEC_SYSTEM_INSTRUCTION)
         self.assertIn("FALSE_POSITIVE", APPSEC_SYSTEM_INSTRUCTION)
         self.assertIn("LAB_ARTIFACT", APPSEC_SYSTEM_INSTRUCTION)
         self.assertIn("DEFENSE_GAP", APPSEC_SYSTEM_INSTRUCTION)
         self.assertIn("ШАГ 2 — КОНТЕКСТ", APPSEC_SYSTEM_INSTRUCTION)
-        self.assertIn("ШАГ 3 — ФИКС", APPSEC_SYSTEM_INSTRUCTION)
-        self.assertIn("## Алерт:", APPSEC_SYSTEM_INSTRUCTION)
-        self.assertIn("Что чинить", APPSEC_SYSTEM_INSTRUCTION)
-        self.assertIn("Код фикса", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("ШАГ 2.5 — ПОДТВЕРЖДЕНИЕ", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("ШАГ 3 — СТЕК", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("ШАГ 4 — ФОРМИРОВАНИЕ ПРОМПТА ДЛЯ КОДЕРА", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("--- НАЧАЛО ПРОМПТА ---", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("--- КОНЕЦ ПРОМПТА ---", APPSEC_SYSTEM_INSTRUCTION)
         self.assertIn("Чего НЕ делать", APPSEC_SYSTEM_INSTRUCTION)
         self.assertIn("Проверка", APPSEC_SYSTEM_INSTRUCTION)
 

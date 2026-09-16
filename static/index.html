@@ -596,69 +596,105 @@
     function formatAiMarkdown(text) {
       if (!text) return '';
 
-      // Разбиваем по fenced code blocks (```...```)
-      const parts = text.split(/(```[\s\S]*?```)/g);
+      // 1. Извлекаем блоки --- НАЧАЛО ПРОМПТА --- ... --- КОНЕЦ ПРОМПТА ---
+      const promptBlocks = [];
+      let processedText = text.replace(/---\s*НАЧАЛО ПРОМПТА\s*---([\s\S]*?)(?:---\s*КОНЕЦ ПРОМПТА\s*---|$)/gi, (match, p1) => {
+        const rawPrompt = p1.trim();
+        const idx = promptBlocks.length;
+        promptBlocks.push(rawPrompt);
+        return `___AI_CODER_PROMPT_${idx}___`;
+      });
 
-      return parts.map((part) => {
-        // Блоки кода (готовый фикс / конфигурация)
-        if (part.startsWith('```') && part.endsWith('```')) {
-          const langMatch = part.match(/^```([a-zA-Z0-9_-]*)\n?/);
-          const lang = (langMatch && langMatch[1]) ? langMatch[1].toUpperCase() : 'CODE';
-          const rawCode = part.replace(/^```[a-zA-Z0-9_-]*\n?/, '').replace(/\n?```$/, '');
-          const safeEncoded = encodeURIComponent(rawCode);
-          const displayCode = rawCode
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
-          return `
-            <div style="margin:10px 0;border:1px solid rgba(168,85,247,0.35);border-radius:8px;background:#0a0814;overflow:hidden;width:100%;box-sizing:border-box;">
-              <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(88,28,135,0.6);padding:7px 12px;border-bottom:1px solid rgba(88,28,135,0.5);gap:8px;">
-                <span style="font-size:10px;color:#c084fc;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;font-family:'JetBrains Mono',monospace;flex-shrink:1;min-width:0;">💻 ${lang} // КОД ИСПРАВЛЕНИЯ</span>
-                <button type="button" onclick="copyGoal(this, '${safeEncoded.replace(/'/g, "\\'")}')"
-                  style="background:#7c3aed;color:#fff;font-size:10px;font-weight:700;padding:4px 10px;border-radius:4px;border:none;cursor:pointer;white-space:nowrap;flex-shrink:0;">
-                  📋 Скопировать код
-                </button>
+      // Вспомогательная функция для рендеринга текста и кода
+      function renderTextContent(t) {
+        const parts = t.split(/(```[\s\S]*?```)/g);
+        return parts.map((part) => {
+          if (part.startsWith('```') && part.endsWith('```')) {
+            const langMatch = part.match(/^```([a-zA-Z0-9_-]*)\n?/);
+            const lang = (langMatch && langMatch[1]) ? langMatch[1].toUpperCase() : 'CODE';
+            const rawCode = part.replace(/^```[a-zA-Z0-9_-]*\n?/, '').replace(/\n?```$/, '');
+            const safeEncoded = encodeURIComponent(rawCode);
+            const displayCode = rawCode
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;');
+            return `
+              <div style="margin:10px 0;border:1px solid rgba(168,85,247,0.35);border-radius:8px;background:#0a0814;overflow:hidden;width:100%;box-sizing:border-box;">
+                <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(88,28,135,0.6);padding:7px 12px;border-bottom:1px solid rgba(88,28,135,0.5);gap:8px;">
+                  <span style="font-size:10px;color:#c084fc;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;font-family:'JetBrains Mono',monospace;flex-shrink:1;min-width:0;">💻 ${lang} // КОД ИСПРАВЛЕНИЯ</span>
+                  <button type="button" onclick="copyGoal(this, '${safeEncoded.replace(/'/g, "\\'")}')"
+                    style="background:#7c3aed;color:#fff;font-size:10px;font-weight:700;padding:4px 10px;border-radius:4px;border:none;cursor:pointer;white-space:nowrap;flex-shrink:0;">
+                    📋 Скопировать код
+                  </button>
+                </div>
+                <pre style="margin:0;padding:12px;color:#34d399;font-size:11px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;font-family:'JetBrains Mono',monospace;line-height:1.6;box-sizing:border-box;">${displayCode}</pre>
               </div>
-              <pre style="margin:0;padding:12px;color:#34d399;font-size:11px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;font-family:'JetBrains Mono',monospace;line-height:1.6;box-sizing:border-box;">${displayCode}</pre>
+            `;
+          }
+
+          let html = part
+            .replace(/[─━]{4,}/g, '<hr style="border:none;border-top:1px solid rgba(139,92,246,0.3);margin:14px 0;">')
+            // Заголовки алертов: 🔴 Алерт: ... или ## Алерт: ...
+            .replace(/^(?:##\s*)?([🔴🟡⚪])?\s*Алерт:\s*(.+)$/gm, (_, icon, title) => {
+              const ic = icon || '🛡️';
+              return `<div style="font-size:13px;font-weight:700;color:#c084fc;margin:12px 0 6px 0;display:flex;align-items:center;gap:6px;"><span>${ic}</span> <span>${title}</span></div>`;
+            })
+            .replace(/^##\s+(.+)$/gm, '<div style="font-size:13px;font-weight:700;color:#c084fc;margin:12px 0 6px 0;">$1</div>')
+            // Подсекции
+            .replace(/^(?:###\s*)?Что чинить[:]?/gm, '<div style="font-size:12px;font-weight:700;color:#38bdf8;margin:10px 0 4px 0;">🔧 Что чинить:</div>')
+            .replace(/^(?:###\s*)?Код фикса[:]?/gm, '<div style="font-size:12px;font-weight:700;color:#34d399;margin:10px 0 4px 0;">✨ Код фикса:</div>')
+            .replace(/^(?:###\s*)?Чего НЕ делать[:]?/gm, '<div style="font-size:12px;font-weight:700;color:#f87171;margin:10px 0 4px 0;">⚠️ Чего НЕ делать:</div>')
+            .replace(/^(?:###\s*)?Проверка[:]?/gm, '<div style="font-size:12px;font-weight:700;color:#fbbf24;margin:10px 0 4px 0;">🧪 Проверка:</div>')
+            .replace(/^(?:###\s*)?Почему не чинить[:]?/gm, '<div style="font-size:12px;font-weight:700;color:#fbbf24;margin:10px 0 4px 0;">💡 Почему не чинить:</div>')
+            .replace(/^(?:###\s*)?Что делать[:]?/gm, '<div style="font-size:12px;font-weight:700;color:#a78bfa;margin:10px 0 4px 0;">📋 Что делать:</div>')
+            // Метки промпта для ИИ-кодера
+            .replace(/^Задача:\s*(.+)$/gm, '<div style="margin:4px 0;"><span style="color:#a78bfa;font-weight:700;">🎯 Задача:</span> <span>$1</span></div>')
+            .replace(/^Стек:\s*(.+)$/gm, '<div style="margin:4px 0;"><span style="color:#38bdf8;font-weight:700;">⚙️ Стек:</span> <span>$1</span></div>')
+            .replace(/^Контекст:\s*$/gm, '<div style="font-size:11px;font-weight:700;color:#94a3b8;margin:6px 0 2px 0;">📌 КОНТЕКСТ:</div>')
+            .replace(/^Что сделать:\s*$/gm, '<div style="font-size:11px;font-weight:700;color:#34d399;margin:6px 0 2px 0;">📝 ЧТО СДЕЛАТЬ:</div>')
+            // Стилизация Вердиктов (REAL, FALSE_POSITIVE, LAB_ARTIFACT, DEFENSE_GAP)
+            .replace(/(?:▸|\*\*)\s*Вердикт:?\s*(?:\*\*)?\s*REAL/g, '<span style="background:rgba(225,29,72,0.25);color:#f43f5e;padding:2px 7px;border-radius:4px;border:1px solid rgba(225,29,72,0.4);font-weight:700;font-size:11px;">🔴 REAL</span>')
+            .replace(/(?:▸|\*\*)\s*Вердикт:?\s*(?:\*\*)?\s*FALSE_POSITIVE/g, '<span style="background:rgba(100,116,139,0.25);color:#94a3b8;padding:2px 7px;border-radius:4px;border:1px solid rgba(100,116,139,0.4);font-weight:700;font-size:11px;">⚪ FALSE_POSITIVE</span>')
+            .replace(/(?:▸|\*\*)\s*Вердикт:?\s*(?:\*\*)?\s*LAB_ARTIFACT/g, '<span style="background:rgba(234,179,8,0.25);color:#facc15;padding:2px 7px;border-radius:4px;border:1px solid rgba(234,179,8,0.4);font-weight:700;font-size:11px;">🟡 LAB_ARTIFACT</span>')
+            .replace(/(?:▸|\*\*)\s*Вердикт:?\s*(?:\*\*)?\s*DEFENSE_GAP/g, '<span style="background:rgba(249,115,22,0.25);color:#fb923c;padding:2px 7px;border-radius:4px;border:1px solid rgba(249,115,22,0.4);font-weight:700;font-size:11px;">🟠 DEFENSE_GAP</span>')
+            // Почему
+            .replace(/(?:▸|\*\*)\s*Почему:?\s*(?:\*\*)?\s*(.+)$/gm, '<div style="margin:4px 0 8px 0;font-size:12px;color:#d1d5db;"><span style="color:#94a3b8;">▸ Почему:</span> <span style="color:#e5e7eb;">$1</span></div>')
+            // Нумерованные списки 1. ... -> flex
+            .replace(/^(\d+)\.\s+(.+)$/gm, '<div style="display:flex;align-items:flex-start;gap:6px;margin:3px 0 3px 6px;"><span style="color:#a855f7;font-weight:700;flex-shrink:0;">$1.</span><span style="flex:1;min-width:0;">$2</span></div>')
+            // Markdown списки (- пункт) -> flex строки
+            .replace(/^[-*•]\s+(.+)$/gm, '<div style="display:flex;align-items:flex-start;gap:6px;margin:3px 0 3px 6px;"><span style="color:#818cf8;flex-shrink:0;">•</span><span style="flex:1;min-width:0;">$1</span></div>')
+            // Markdown bold (**текст**)
+            .replace(/\*\*([^*]+)\*\*/g, '<strong style="font-weight:700;color:#f3f4f6;">$1</strong>');
+
+          // Telegram HTML-теги
+          return sanitizeHtml(html);
+        }).join('');
+      }
+
+      let renderedHtml = renderTextContent(processedText);
+
+      // 2. Вставляем обратно стилизованные карточки для ИИ-промптов с кнопкой копирования всего промпта
+      promptBlocks.forEach((rawPrompt, idx) => {
+        const safeEncodedPrompt = encodeURIComponent(rawPrompt);
+        const innerContent = renderTextContent(rawPrompt);
+        const promptCardHtml = `
+          <div style="margin:14px 0;border:1px solid rgba(99,102,241,0.5);border-radius:8px;background:rgba(15,12,30,0.95);overflow:hidden;box-sizing:border-box;">
+            <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(49,46,129,0.7);padding:8px 12px;border-bottom:1px solid rgba(99,102,241,0.4);gap:8px;">
+              <span style="font-size:11px;color:#a5b4fc;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;">🤖 ПРОМПТ ДЛЯ ИИ-КОДЕРА</span>
+              <button type="button" onclick="copyGoal(this, '${safeEncodedPrompt.replace(/'/g, "\\'")}')"
+                style="background:#4f46e5;color:#fff;font-size:11px;font-weight:700;padding:5px 12px;border-radius:4px;border:none;cursor:pointer;white-space:nowrap;flex-shrink:0;box-shadow:0 1px 3px rgba(0,0,0,0.3);">
+                📋 Скопировать весь промпт
+              </button>
             </div>
-          `;
-        }
+            <div style="padding:12px;font-size:12px;line-height:1.6;color:#e2e8f0;box-sizing:border-box;">
+              ${innerContent}
+            </div>
+          </div>
+        `;
+        renderedHtml = renderedHtml.replace(`___AI_CODER_PROMPT_${idx}___`, promptCardHtml);
+      });
 
-        // Обычный текст — разделители между алертами
-        let html = part.replace(/─{4,}/g, '<hr style="border:none;border-top:1px solid rgba(139,92,246,0.3);margin:16px 0;">');
-
-        // Обрабатываем markdown заголовки алертов
-        html = html
-          // ## Алерт: ...
-          .replace(/^##\s+Алерт:\s*(.+)$/gm, '<div style="font-size:14px;font-weight:700;color:#c084fc;margin:12px 0 6px 0;display:flex;align-items:center;gap:6px;"><span style="color:#a855f7;">🛡️</span> <span>$1</span></div>')
-          .replace(/^##\s+(.+)$/gm, '<div style="font-size:14px;font-weight:700;color:#c084fc;margin:12px 0 6px 0;">$1</div>')
-          // ### Что чинить / Код фикса / Чего НЕ делать / Проверка
-          .replace(/^###\s+Что чинить/gm, '<div style="font-size:12px;font-weight:700;color:#38bdf8;margin:10px 0 4px 0;">🔧 Что чинить:</div>')
-          .replace(/^###\s+Код фикса/gm, '<div style="font-size:12px;font-weight:700;color:#34d399;margin:10px 0 4px 0;">✨ Код фикса:</div>')
-          .replace(/^###\s+Чего НЕ делать/gm, '<div style="font-size:12px;font-weight:700;color:#f87171;margin:10px 0 4px 0;">⚠️ Чего НЕ делать:</div>')
-          .replace(/^###\s+Проверка/gm, '<div style="font-size:12px;font-weight:700;color:#fbbf24;margin:10px 0 4px 0;">🧪 Проверка:</div>')
-          .replace(/^###\s+Почему не чинить/gm, '<div style="font-size:12px;font-weight:700;color:#fbbf24;margin:10px 0 4px 0;">💡 Почему не чинить:</div>')
-          .replace(/^###\s+Что делать/gm, '<div style="font-size:12px;font-weight:700;color:#a78bfa;margin:10px 0 4px 0;">📋 Что делать:</div>')
-          .replace(/^###\s+(.+)$/gm, '<div style="font-size:12px;font-weight:700;color:#e2e8f0;margin:8px 0 4px 0;">$1</div>');
-
-        // Стилизация Вердиктов (REAL, FALSE_POSITIVE, LAB_ARTIFACT, DEFENSE_GAP)
-        html = html
-          .replace(/\*\*Вердикт:\*\*\s*REAL/g, '**Вердикт:** <span style="background:rgba(225,29,72,0.25);color:#f43f5e;padding:2px 7px;border-radius:4px;border:1px solid rgba(225,29,72,0.4);font-weight:700;font-size:11px;">🔴 REAL</span>')
-          .replace(/\*\*Вердикт:\*\*\s*FALSE_POSITIVE/g, '**Вердикт:** <span style="background:rgba(100,116,139,0.25);color:#94a3b8;padding:2px 7px;border-radius:4px;border:1px solid rgba(100,116,139,0.4);font-weight:700;font-size:11px;">⚪ FALSE_POSITIVE</span>')
-          .replace(/\*\*Вердикт:\*\*\s*LAB_ARTIFACT/g, '**Вердикт:** <span style="background:rgba(234,179,8,0.25);color:#facc15;padding:2px 7px;border-radius:4px;border:1px solid rgba(234,179,8,0.4);font-weight:700;font-size:11px;">🟡 LAB_ARTIFACT</span>')
-          .replace(/\*\*Вердикт:\*\*\s*DEFENSE_GAP/g, '**Вердикт:** <span style="background:rgba(249,115,22,0.25);color:#fb923c;padding:2px 7px;border-radius:4px;border:1px solid rgba(249,115,22,0.4);font-weight:700;font-size:11px;">🟠 DEFENSE_GAP</span>');
-
-        // Markdown списки (- пункт) -> flex строки
-        html = html.replace(/^[-*]\s+(.+)$/gm, '<div style="display:flex;align-items:flex-start;gap:6px;margin:3px 0 3px 6px;"><span style="color:#818cf8;flex-shrink:0;">•</span><span style="flex:1;min-width:0;">$1</span></div>');
-
-        // Markdown bold (**текст**)
-        html = html.replace(/\*\*([^*]+)\*\*/g, '<strong style="font-weight:700;color:#f3f4f6;">$1</strong>');
-
-        // Telegram HTML-теги
-        html = sanitizeHtml(html);
-
-        return html;
-      }).join('');
+      return renderedHtml;
     }
 
     // Копирование промпта в буфер обмена
