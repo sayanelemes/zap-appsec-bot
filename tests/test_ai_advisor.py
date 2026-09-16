@@ -9,14 +9,21 @@ from bot.services.ai.formatter import format_telegram_html
 
 class TestAiAdvisor(unittest.TestCase):
     def test_system_prompt_structure(self):
-        """Проверка структуры системного промпта AppSec AI"""
-        self.assertIn("💡 <b>Что это такое простыми словами:</b>", APPSEC_SYSTEM_INSTRUCTION)
-        self.assertIn("🤖 <b>Промпт для AI-агента", APPSEC_SYSTEM_INSTRUCTION)
-        self.assertIn("/goal Устранить уязвимость", APPSEC_SYSTEM_INSTRUCTION)
-        self.assertIn("Контекст:", APPSEC_SYSTEM_INSTRUCTION)
-        self.assertIn("Пошаговый план поиска файлов", APPSEC_SYSTEM_INSTRUCTION)
-        self.assertIn("Инструкция по внедрению безопасного решения", APPSEC_SYSTEM_INSTRUCTION)
-        self.assertIn("Критерии приемки (Definition of Done)", APPSEC_SYSTEM_INSTRUCTION)
+        """Проверка структуры системного промпта AppSec AI аудитора"""
+        self.assertIn("Ты — ведущий Senior AppSec аудитор", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("ШАГ 1 — ВАЛИДАЦИЯ АЛЕРТА", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("REAL", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("FALSE_POSITIVE", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("LAB_ARTIFACT", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("DEFENSE_GAP", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("ШАГ 2 — КОНТЕКСТ", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("ШАГ 3 — ФИКС", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("## Алерт:", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("Что чинить", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("Код фикса", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("Чего НЕ делать", APPSEC_SYSTEM_INSTRUCTION)
+        self.assertIn("Проверка", APPSEC_SYSTEM_INSTRUCTION)
+
 
     def test_deduplication(self):
         """Проверка дедупликации алертов ZAP по имени и параметру"""
