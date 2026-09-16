@@ -32,14 +32,14 @@ case "$action" in
       sleep 1
       waited=$((waited + 1))
       if [ -f "$LOG_FILE" ]; then
-        TUNNEL_URL=$(grep -o -E 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$LOG_FILE" | head -n 1 || true)
+        TUNNEL_URL=$(grep -o -E 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$LOG_FILE" | grep -v 'api\.trycloudflare\.com' | tail -n 1 || true)
         if [ -n "$TUNNEL_URL" ]; then
           break
         fi
       fi
     done
 
-    if [ -n "$TUNNEL_URL" ]; then
+    if [ -n "$TUNNEL_URL" ] && [ "$TUNNEL_URL" != "https://api.trycloudflare.com" ]; then
       echo "✅ Туннель активен: $TUNNEL_URL"
 
       # Обновляем WEBAPP_URL в .env
