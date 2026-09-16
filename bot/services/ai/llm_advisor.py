@@ -7,6 +7,7 @@ from google.genai import errors, types
 
 from bot.config.config import settings
 from bot.services.ai.client import create_gemini_client
+from bot.services.zap.translations import translate_zap_alert
 
 logger = logging.getLogger(__name__)
 
@@ -161,15 +162,16 @@ def sanitize_text_for_llm(text: Any, max_len: int = 250) -> str:
     return val[:max_len]
 
 
-# Приоритетный список моделей Gemini в порядке предпочтения.
+# Приоритетный список моделей Gemini 3 в порядке предпочтения.
 # При 503/429 последовательно перебираем с экспоненциальным backoff.
+# Используются современные модели линейки Gemini 3.
 GEMINI_FALLBACK_CHAIN = [
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-8b",
+    "gemini-3.6-flash",         # Основная быстрая модель Gemini 3
+    "gemini-3.5-flash-lite",    # Легковесная версия Gemini 3
+    "gemini-3.5-flash",         # Стабильная flash модель
+    "gemini-3.7-flash",         # Продвинутая модель Gemini 3
+    "gemini-3.0-flash",         # Базовая модель Gemini 3
+    "gemini-flash-latest",      # Алиас latest
 ]
 
 # Заглушка-отчет: возвращается когда ВСЕ модели из цепочки недоступны
@@ -212,8 +214,8 @@ class LlmAdvisorService:
             if settings and settings.GEMINI_API_KEY
             else None
         )
-        # Пользовательская модель ставится первой в цепочке
-        self._preferred_model = model
+        # По умолчанию берется модель из конфигурации (gemini-3.6-flash)
+        self._preferred_model = model or (settings.GEMINI_MODEL if settings and settings.GEMINI_MODEL else "gemini-3.6-flash")
         self.client: genai.Client | None = create_gemini_client(self.api_key)
 
     def _build_model_chain(self) -> list[str]:

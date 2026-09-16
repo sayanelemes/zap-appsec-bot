@@ -25,7 +25,7 @@ from bot.keyboards.inline import (
 )
 from bot.services.ai import LlmAdvisorService, deduplicate_alerts, format_telegram_html
 from bot.services.security import validate_url_safe
-from bot.services.zap import ZapService
+from bot.services.zap import ZapService, translate_zap_alert
 from bot.utils.ui import safe_edit_message, track_extra_message, update_screen
 
 logger = logging.getLogger(__name__)
@@ -504,7 +504,8 @@ async def _execute_scan_worker(
             for item in deduped:
                 r = str(item.get("risk", "Low")).capitalize()
                 emoji = risk_emojis.get(r, "⚪")
-                name = item.get("alert", "Неизвестная уязвимость")
+                raw_name = item.get("alert", "Неизвестная уязвимость")
+                name, _ = translate_zap_alert(raw_name)
                 param = f" (параметр: <code>{html.escape(item['param'])}</code>)" if item.get("param") else ""
                 issues_lines.append(f"{emoji} <b>[{r}]</b> {html.escape(name)}{param}")
 

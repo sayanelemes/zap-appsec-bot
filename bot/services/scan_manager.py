@@ -11,7 +11,7 @@ from bot.config.config import settings
 from bot.services.ai import deduplicate_alerts
 from bot.services.sast import GithubSastAuditor, extract_github_owner_repo
 from bot.services.security import validate_url_safe
-from bot.services.zap import ZapService
+from bot.services.zap import ZapService, translate_zap_alert
 
 logger = logging.getLogger(__name__)
 
@@ -403,10 +403,14 @@ class ScanManager:
                 cwe_id = a.get("cweid", "")
                 cwe_str = f"CWE-{cwe_id}" if cwe_id and cwe_id != "0" else ""
 
+                raw_title = a.get("alert", "Уязвимость ZAP")
+                raw_desc = a.get("description", "") or a.get("solution", "")
+                ru_title, ru_desc = translate_zap_alert(raw_title, raw_desc)
+
                 findings.append({
-                    "title": a.get("alert", "Уязвимость ZAP"),
+                    "title": ru_title,
                     "severity": sev,
-                    "description": a.get("description", "") or a.get("solution", ""),
+                    "description": ru_desc,
                     "param": a.get("param", ""),
                     "cwe": cwe_str,
                     "cve": "",
